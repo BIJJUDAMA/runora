@@ -90,8 +90,52 @@ func QueryLocalVersion(llamaCppDir string) (version string, commit string, build
 }
 
 // CheckLatestRelease queries GitHub API for the latest llama.cpp release.
+// Since llama.cpp publishes continuous builds (bXXXX) as releases, querying
+// /releases?per_page=10 guarantees finding the latest build with release assets.
 func CheckLatestRelease() (*GithubRelease, error) {
+	releases, err := fetchReleasesList("https://api.github.com/repos/ggerganov/llama.cpp/releases?per_page=10")
+	if err == nil && len(releases) > 0 {
+		for _, r := range releases {
+			if len(r.Assets) > 0 && strings.HasPrefix(strings.ToLower(r.TagName), "b") {
+				return &r, nil
+			}
+		}
+		// If no bXXXX tag found, pick the first release with assets
+		for _, r := range releases {
+			if len(r.Assets) > 0 {
+				return &r, nil
+			}
+		}
+		return &releases[0], nil
+	}
+
 	return fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
+}
+
+func fetchReleasesList(url string) ([]GithubRelease, error) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "runora-updater")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch releases list: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github API returned status %s", resp.Status)
+	}
+
+	var releases []GithubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, err
+	}
+
+	return releases, nil
 }
 
 // CheckAppRelease queries GitHub API for the latest runora release or tag.

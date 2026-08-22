@@ -10,6 +10,27 @@ import (
 	"github.com/BIJJUDAMA/runora/hardware"
 )
 
+func TestLiveCheckLatestRelease(t *testing.T) {
+	rel, err := CheckLatestRelease()
+	if err != nil {
+		t.Fatalf("CheckLatestRelease failed: %v", err)
+	}
+	t.Logf("Selected llama.cpp release: Tag=%s, Name=%s, Assets=%d", rel.TagName, rel.Name, len(rel.Assets))
+
+	specsWinCUDA := &hardware.HardwareSpecs{
+		OS: "Windows",
+		GPU: hardware.GPUSpecs{
+			Type:        "CUDA",
+			CudaVersion: "13",
+		},
+	}
+	mainAsset, cudartAsset, err := MatchAsset(rel, specsWinCUDA)
+	if err != nil {
+		t.Fatalf("MatchAsset failed: %v", err)
+	}
+	t.Logf("Matched main asset: %s, Cudart: %+v", mainAsset.Name, cudartAsset)
+}
+
 func TestMatchAsset(t *testing.T) {
 	release := &GithubRelease{
 		TagName: "b3310",
