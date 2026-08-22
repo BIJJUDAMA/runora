@@ -94,13 +94,56 @@ func CheckLatestRelease() (*GithubRelease, error) {
 	return fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
 }
 
-// CheckAppRelease queries GitHub API for the latest llama-manager release.
+// CheckAppRelease queries GitHub API for the latest runora release or tag.
 func CheckAppRelease() (*GithubRelease, error) {
-	rel, err := fetchLatestRelease("https://api.github.com/repos/BIJJUDAMA/llama-manager/releases/latest")
-	if err != nil {
-		return nil, fmt.Errorf("failed to check latest release: %w", err)
+	rel, err := fetchLatestRelease("https://api.github.com/repos/BIJJUDAMA/runora/releases/latest")
+	if err == nil {
+		return rel, nil
 	}
-	return rel, nil
+
+	// Fallback to checking tags if no formal GitHub Release exists
+	tagRel, tagErr := fetchLatestTag("https://api.github.com/repos/BIJJUDAMA/runora/tags")
+	if tagErr == nil {
+		return tagRel, nil
+	}
+
+	return nil, fmt.Errorf("failed to check latest release: %w", err)
+}
+
+type GithubTag struct {
+	Name string `json:"name"`
+}
+
+func fetchLatestTag(url string) (*GithubRelease, error) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "runora-updater")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch tags: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github API returned status %s", resp.Status)
+	}
+
+	var tags []GithubTag
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return nil, err
+	}
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("no tags found in repository")
+	}
+
+	return &GithubRelease{
+		TagName: tags[0].Name,
+		Name:    tags[0].Name,
+	}, nil
 }
 
 func fetchLatestRelease(url string) (*GithubRelease, error) {
@@ -109,7 +152,7 @@ func fetchLatestRelease(url string) (*GithubRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "llama-manager-updater")
+	req.Header.Set("User-Agent", "runora-updater")
 
 	resp, err := client.Do(req)
 	if err != nil {
