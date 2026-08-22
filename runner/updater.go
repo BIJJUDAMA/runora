@@ -144,19 +144,32 @@ func CheckLatestRelease() (*GithubRelease, error) {
 	return rel, nil
 }
 
+func applyAuthHeader(req *http.Request) {
+	req.Header.Set("User-Agent", "runora-updater")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else if token := os.Getenv("GH_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
 func fetchTextFile(url string) (string, error) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "runora-updater")
+	applyAuthHeader(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch text file: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("GitHub rate limit exceeded (403). Set GITHUB_TOKEN or wait a moment.")
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("github returned status %s", resp.Status)
@@ -173,13 +186,17 @@ func fetchReleasesList(url string) ([]GithubRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "runora-updater")
+	applyAuthHeader(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch releases list: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("GitHub API rate limit exceeded (403 Forbidden). Set GITHUB_TOKEN or wait a few minutes.")
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github API returned status %s", resp.Status)
@@ -219,13 +236,17 @@ func fetchLatestTag(url string) (*GithubRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "runora-updater")
+	applyAuthHeader(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tags: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("GitHub API rate limit exceeded (403 Forbidden). Set GITHUB_TOKEN or wait a few minutes.")
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github API returned status %s", resp.Status)
@@ -251,13 +272,17 @@ func fetchLatestRelease(url string) (*GithubRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "runora-updater")
+	applyAuthHeader(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("GitHub API rate limit exceeded (403 Forbidden). Set GITHUB_TOKEN or wait a few minutes.")
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github API returned status %s", resp.Status)
