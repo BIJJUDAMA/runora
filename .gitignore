@@ -5,6 +5,7 @@ runora
 runora.exe
 *.exe
 *.dll
+*.ps1
 
 # App directories
 llama.cpp/
@@ -14,3 +15,4 @@ cache/
 benchmarks/
 downloads/
 config.json
+
