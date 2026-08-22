@@ -94,7 +94,7 @@ func resolveAppVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		v := info.Main.Version
 		if v != "" && v != "(devel)" {
-			return v
+			return strings.TrimSuffix(v, "+dirty")
 		}
 	}
 	return "dev"
