@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BIJJUDAMA/runora/hardware"
@@ -144,11 +145,31 @@ func CheckLatestRelease() (*GithubRelease, error) {
 	return rel, nil
 }
 
+var (
+	customGitHubTokenMu sync.RWMutex
+	customGitHubToken   string
+)
+
+// SetGitHubToken sets a user-configured GitHub personal access token to authenticate release API requests.
+func SetGitHubToken(token string) {
+	customGitHubTokenMu.Lock()
+	defer customGitHubTokenMu.Unlock()
+	customGitHubToken = strings.TrimSpace(token)
+}
+
 func applyAuthHeader(req *http.Request) {
 	req.Header.Set("User-Agent", "runora-updater")
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	} else if token := os.Getenv("GH_TOKEN"); token != "" {
+	customGitHubTokenMu.RLock()
+	token := customGitHubToken
+	customGitHubTokenMu.RUnlock()
+
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 }

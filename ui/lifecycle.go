@@ -69,6 +69,7 @@ type LifecycleModel struct {
 	width, height    int
 	tokenInput       textinput.Model
 	tokenEditActive  bool
+	tokenEditTarget  string // "hf" or "github"
 	// App self-update fields
 	appVersion       string
 	appLatestTag     string
@@ -111,6 +112,8 @@ func NewLifecycleModel(cfg *config.Config, srv runner.ModelRuntime) *LifecycleMo
 	ti.Width = 40
 	ti.EchoMode = textinput.EchoPassword
 
+	runner.SetGitHubToken(cfg.GitHubToken)
+
 	m := &LifecycleModel{
 		srvRunner:       srv,
 		config:          cfg,
@@ -118,6 +121,7 @@ func NewLifecycleModel(cfg *config.Config, srv runner.ModelRuntime) *LifecycleMo
 		state:           StateIdle,
 		tokenInput:      ti,
 		tokenEditActive: false,
+		tokenEditTarget: "hf",
 		appVersion:      resolveAppVersion(),
 		SelectedRuntime: 0,
 	}
@@ -578,7 +582,13 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "enter":
-				m.config.HFToken = strings.TrimSpace(m.tokenInput.Value())
+				val := strings.TrimSpace(m.tokenInput.Value())
+				if m.tokenEditTarget == "github" {
+					m.config.GitHubToken = val
+					runner.SetGitHubToken(val)
+				} else {
+					m.config.HFToken = val
+				}
 				_ = m.config.Save()
 				m.tokenInput.Blur()
 				m.tokenEditActive = false
@@ -595,8 +605,17 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 		switch msg.String() {
 		case "t", "T":
 			m.tokenEditActive = true
+			m.tokenEditTarget = "hf"
+			m.tokenInput.Placeholder = "Enter HF_TOKEN (hf_...)"
 			m.tokenInput.Focus()
 			m.tokenInput.SetValue(m.config.HFToken)
+			return m, nil
+		case "g", "G":
+			m.tokenEditActive = true
+			m.tokenEditTarget = "github"
+			m.tokenInput.Placeholder = "Enter GITHUB_TOKEN (ghp_...)"
+			m.tokenInput.Focus()
+			m.tokenInput.SetValue(m.config.GitHubToken)
 			return m, nil
 		}
 
@@ -675,11 +694,20 @@ func (m *LifecycleModel) View(width int, height int) string {
 	m.height = height
 
 	if m.tokenEditActive {
+		title := "CONFIGURE HUGGING FACE TOKEN"
+		desc1 := "Please enter or paste your Hugging Face API token (HF_TOKEN)."
+		desc2 := "This token is used for downloading gated/private models and avoiding API limits."
+		if m.tokenEditTarget == "github" {
+			title = "CONFIGURE GITHUB API TOKEN"
+			desc1 = "Please enter or paste your GitHub Personal Access Token (GITHUB_TOKEN / GH_TOKEN)."
+			desc2 = "This token increases release check rate limits from 60 to 5,000 requests per hour."
+		}
+
 		var sb strings.Builder
 		sb.WriteString("\n")
-		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("CONFIGURE HUGGING FACE TOKEN")))
-		sb.WriteString("  Please enter or paste your Hugging Face API token (HF_TOKEN).\n")
-		sb.WriteString("  This token is used for downloading gated/private models and avoiding API limits.\n\n")
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(title)))
+		sb.WriteString("  " + desc1 + "\n")
+		sb.WriteString("  " + desc2 + "\n\n")
 		sb.WriteString("  " + m.tokenInput.View() + "\n\n")
 		sb.WriteString("  " + StyleHelpKey.Render("[Enter]") + " Save Token  " + StyleHelpKey.Render("[Esc]") + " Cancel / Exit\n")
 
@@ -792,6 +820,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Preferences & Hardware:") + "\n")
 	themeStr := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(strings.Title(m.config.Theme))
 	tokenStr := maskToken(m.config.HFToken)
+	ghTokenStr := maskToken(m.config.GitHubToken)
 	onboardStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Completed")
 	if !m.config.OnboardingCompleted {
 		onboardStr = lipgloss.NewStyle().Foreground(ColorAccent).Render("Not completed")
@@ -806,11 +835,13 @@ func (m *LifecycleModel) View(width int, height int) string {
 	col1Right := fmt.Sprintf("%-20s %s", "Operating System:", m.specs.OS)
 	sb.WriteString(fmt.Sprintf("%s │   %s\n", col1Left, col1Right))
 
-	col2Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "HF Token:", tokenStr))
+	col2Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "HF Token [T]:", tokenStr))
 	col2Right := fmt.Sprintf("%-20s %s", "GPU Accelerator:", gpuDesc)
 	sb.WriteString(fmt.Sprintf("%s │   %s\n", col2Left, col2Right))
 
-	sb.WriteString(fmt.Sprintf("      %-18s %s\n", "Onboarding Tour:", onboardStr))
+	col3Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "GitHub Token [G]:", ghTokenStr))
+	col3Right := fmt.Sprintf("%-20s %s", "Onboarding Tour:", onboardStr)
+	sb.WriteString(fmt.Sprintf("%s │   %s\n", col3Left, col3Right))
 	sb.WriteString("\n")
 
 	// ── Runtime status ───────────────────────────────────────────────────────
@@ -868,6 +899,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		}
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Theme", StyleHelpKey.Render("[Y]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Reset Tour", StyleHelpKey.Render("[N]")))
 	}
 	helpKeys = append(helpKeys, fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")))

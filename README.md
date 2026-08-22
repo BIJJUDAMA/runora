@@ -98,12 +98,13 @@ Runora is fully keyboard-driven. Below are the key mappings available across the
 
 ### Settings / Lifecycle Screen
 
-- `Tab` / `Shift+Tab` or `↑` / `↓`: Switch focus between components (llama.cpp, ONNX Runtime, Runora App).
+- `1` / `2` / `3` or `Tab` / `Shift+Tab` / `↑` / `↓`: Switch focus between components (1: llama.cpp, 2: ONNX Runtime, 3: Runora App).
 - `C` / `Enter`: Check for updates on the selected runtime or application.
 - `U` / `Space`: Download and install updates for the selected runtime or application.
 - `R`: Roll back the selected runtime to the previous backup version.
 - `Y`: Cycle visual theme.
 - `T`: Edit Hugging Face API token (`HF_TOKEN`) for gated models.
+- `G`: Edit GitHub Personal Access Token (`GITHUB_TOKEN`) to expand release check rate limits.
 - `N`: Reset the interactive onboarding tour.
 - `Esc`: Return to the main model browser.
 

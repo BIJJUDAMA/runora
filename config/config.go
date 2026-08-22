@@ -62,6 +62,7 @@ type Config struct {
 	ModelProfiles       map[string]string `json:"model_profiles"`
 	ModelTasks          map[string]string `json:"model_tasks"`
 	HFToken             string            `json:"hf_token"`
+	GitHubToken         string            `json:"github_token"`
 	OnboardingCompleted bool              `json:"onboarding_completed"`
 
 	// configPath is the resolved path to config.json on disk.

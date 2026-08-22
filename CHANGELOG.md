@@ -4,32 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.3] - 2026-08-22
-
-### Added
-- Support for GITHUB_TOKEN and GH_TOKEN environment variables in release queries to expand rate limits from 60 to 5,000 req/hour.
-
-### Fixed
-- Improved GitHub API rate limit error detection and diagnostic feedback on 403 Forbidden responses.
-
-## [1.1.2] - 2026-08-22
-
-### Added
-- Direct numeric hotkeys (1, 2, 3) to switch runtime focus in the Settings view.
-- Explicit inline available actions indicator for each runtime option card.
-
-### Fixed
-- Fixed column vertical separator alignment in the Preferences and Hardware info panel.
-- Clean opening of Settings view without triggering automatic background downloads.
-
 ## [1.1.1] - 2026-08-22
 
 ### Added
 - Support for llama.cpp semantic versioning releases (vX.Y.Z) with automated nightly build tag resolution via nightly-tag.txt.
+- In-app configuration and environment variable support for GitHub API token (G hotkey) to increase release check limits from 60 to 5,000 req/hour.
+- Direct numeric hotkeys (1, 2, 3) to switch runtime focus in the Settings view.
+- Explicit inline available actions indicator for each runtime option card.
 
 ### Fixed
 - Resolved lifecycle message channel cross-contamination between runtime engines and application update checks.
 - Resolved Windows CUDA asset matching for upstream continuous builds.
+- Fixed column vertical separator alignment in the Preferences and Hardware info panel.
+- Clean opening of Settings view without triggering automatic background downloads.
+- Improved GitHub API rate limit error detection and diagnostic feedback on 403 Forbidden responses.
 
 ## [1.1.0] - 2026-08-22
 

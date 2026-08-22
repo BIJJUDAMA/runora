@@ -753,7 +753,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.config.Theme = newTheme
 					_ = m.config.Save()
 					ApplyTheme(newTheme)
-				case "t", "T":
+				case "t", "T", "g", "G":
 					_, cmd := m.lifecycleModel.Update(msg)
 					if cmd != nil {
 						cmds = append(cmds, cmd)
