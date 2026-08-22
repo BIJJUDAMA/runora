@@ -244,6 +244,41 @@ func TestExtractOnnxLibraryZip(t *testing.T) {
 	}
 }
 
+func TestExtractOnnxLibraryArchiveFormatSniffing(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "onnx-archive-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create file with .archive extension (which caused the user's error previously)
+	archivePath := filepath.Join(tempDir, "onnxruntime-v1.27.0.archive")
+	archiveFile, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("failed to create archive file: %v", err)
+	}
+
+	zw := zip.NewWriter(archiveFile)
+	w, err := zw.Create("onnxruntime-win-x64-1.27.0/lib/onnxruntime.dll")
+	if err != nil {
+		t.Fatalf("failed to create zip entry: %v", err)
+	}
+	_, _ = w.Write([]byte("mock-dll-content"))
+	_ = zw.Close()
+	_ = archiveFile.Close()
+
+	destDir := filepath.Join(tempDir, "extracted")
+	err = ExtractOnnxLibrary(archivePath, destDir)
+	if err != nil {
+		t.Fatalf("ExtractOnnxLibrary failed on .archive extension with magic bytes: %v", err)
+	}
+
+	dllPath := filepath.Join(destDir, "onnxruntime.dll")
+	if _, err := os.Stat(dllPath); os.IsNotExist(err) {
+		t.Errorf("expected onnxruntime.dll to be extracted from .archive, not found")
+	}
+}
+
 func TestExtractAndFlattenZip(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "llama-manager-test")
 	if err != nil {

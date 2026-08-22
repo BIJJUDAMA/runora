@@ -398,27 +398,61 @@ func QueryLocalOnnxVersion(onnxDir string) (string, error) {
 	return "Installed (Unknown Version)", nil
 }
 
+func detectArchiveType(archivePath string) string {
+	ext := strings.ToLower(filepath.Ext(archivePath))
+	if ext == ".zip" || ext == ".nupkg" || ext == ".jar" {
+		return "zip"
+	}
+	if ext == ".tar.gz" || ext == ".tgz" || strings.HasSuffix(strings.ToLower(archivePath), ".tar.gz") {
+		return "targz"
+	}
+
+	// Sniff magic bytes
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var header [4]byte
+	n, err := io.ReadFull(f, header[:])
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return ""
+	}
+	if n >= 2 && header[0] == 0x1f && header[1] == 0x8b {
+		return "targz"
+	}
+	if n >= 4 && header[0] == 'P' && header[1] == 'K' && (header[2] == 3 || header[2] == 5 || header[2] == 7) && (header[3] == 4 || header[3] == 6 || header[3] == 8) {
+		return "zip"
+	}
+
+	return ""
+}
+
 // ExtractOnnxLibrary extracts only the ONNX Runtime library from zip/tar.gz files.
 func ExtractOnnxLibrary(archivePath string, destDir string) error {
-	ext := strings.ToLower(filepath.Ext(archivePath))
-	if ext == ".zip" {
+	format := detectArchiveType(archivePath)
+	switch format {
+	case "zip":
 		return extractOnnxZip(archivePath, destDir)
-	} else if ext == ".tar.gz" || ext == ".tgz" || strings.HasSuffix(strings.ToLower(archivePath), ".tar.gz") {
+	case "targz":
 		return extractOnnxTarGz(archivePath, destDir)
+	default:
+		ext := filepath.Ext(archivePath)
+		return fmt.Errorf("unsupported archive format: %s", ext)
 	}
-	return fmt.Errorf("unsupported archive format: %s", ext)
 }
 
 func matchesOnnxLibName(name string) bool {
 	base := filepath.Base(name)
 	baseLower := strings.ToLower(base)
 	if runtime.GOOS == "windows" {
-		return baseLower == "onnxruntime.dll" || baseLower == "onnxruntime.lib"
+		return strings.HasPrefix(baseLower, "onnxruntime") && (strings.HasSuffix(baseLower, ".dll") || strings.HasSuffix(baseLower, ".lib"))
 	}
 	if runtime.GOOS == "darwin" {
 		return strings.HasPrefix(baseLower, "libonnxruntime") && strings.HasSuffix(baseLower, ".dylib")
 	}
-	return strings.HasPrefix(baseLower, "libonnxruntime.so")
+	return strings.HasPrefix(baseLower, "libonnxruntime") && (strings.HasSuffix(baseLower, ".so") || strings.Contains(baseLower, ".so."))
 }
 
 func extractOnnxZip(archivePath string, destDir string) error {
@@ -516,7 +550,17 @@ func extractOnnxTarGz(archivePath string, destDir string) error {
 
 // DownloadAndInstallOnnxRuntime downloads the ONNX release asset, extracts the library files, and writes a version.txt.
 func DownloadAndInstallOnnxRuntime(url string, destDir string, version string, downloadsDir string, progressChan chan float64) error {
-	tempFile := filepath.Join(downloadsDir, fmt.Sprintf("onnxruntime-%s.archive", version))
+	ext := ".zip"
+	urlLower := strings.ToLower(url)
+	if strings.HasSuffix(urlLower, ".tar.gz") || strings.HasSuffix(urlLower, ".tgz") {
+		ext = ".tar.gz"
+	} else if strings.HasSuffix(urlLower, ".nupkg") {
+		ext = ".nupkg"
+	} else if strings.HasSuffix(urlLower, ".zip") {
+		ext = ".zip"
+	}
+
+	tempFile := filepath.Join(downloadsDir, fmt.Sprintf("onnxruntime-%s%s", version, ext))
 	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
 		return err
 	}
@@ -527,8 +571,17 @@ func DownloadAndInstallOnnxRuntime(url string, destDir string, version string, d
 	}
 	defer os.Remove(tempFile)
 
+	// Backup existing installation if present
+	backupDir := destDir + ".backup"
+	if _, statErr := os.Stat(destDir); statErr == nil {
+		_ = CreateBackup(destDir, backupDir)
+	}
+
 	err = ExtractOnnxLibrary(tempFile, destDir)
 	if err != nil {
+		if _, statErr := os.Stat(backupDir); statErr == nil {
+			_ = RollbackBackup(backupDir, destDir)
+		}
 		return fmt.Errorf("failed to extract library: %w", err)
 	}
 
@@ -606,14 +659,16 @@ func DownloadRelease(url string, destPath string, progressChan chan float64) err
 
 // ExtractArchive extracts zip/tar.gz into destDir and flattens single directories.
 func ExtractArchive(archivePath string, destDir string) error {
-	ext := strings.ToLower(filepath.Ext(archivePath))
+	format := detectArchiveType(archivePath)
 	var err error
 
-	if ext == ".zip" {
+	switch format {
+	case "zip":
 		err = extractZip(archivePath, destDir)
-	} else if ext == ".tar.gz" || ext == ".tgz" || strings.HasSuffix(strings.ToLower(archivePath), ".tar.gz") {
+	case "targz":
 		err = extractTarGz(archivePath, destDir)
-	} else {
+	default:
+		ext := filepath.Ext(archivePath)
 		return fmt.Errorf("unsupported archive format: %s", ext)
 	}
 
