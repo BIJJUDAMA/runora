@@ -34,6 +34,7 @@ const (
 )
 
 type updateMsg struct {
+	target   string // "llamacpp", "onnx", "app"
 	state    LifecycleState
 	progress float64
 	msg      string
@@ -206,10 +207,10 @@ func (m *LifecycleModel) StartCheckOnly() tea.Cmd {
 	ch := make(chan updateMsg)
 
 	go func() {
-		ch <- updateMsg{state: StateChecking, msg: "Checking for updates...", ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateChecking, msg: "Checking for llama.cpp updates...", ch: ch}
 		release, err := runner.CheckLatestRelease()
 		if err != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to check for updates: %w", err), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to check for updates: %w", err), ch: ch}
 			return
 		}
 
@@ -222,6 +223,7 @@ func (m *LifecycleModel) StartCheckOnly() tea.Cmd {
 		}
 
 		ch <- updateMsg{
+			target:  "llamacpp",
 			state:   state,
 			msg:     fmt.Sprintf("Latest available release: %s", release.TagName),
 			release: release,
@@ -236,10 +238,10 @@ func (m *LifecycleModel) StartOnnxCheckOnly() tea.Cmd {
 	ch := make(chan updateMsg)
 
 	go func() {
-		ch <- updateMsg{state: StateChecking, msg: "Checking for ONNX updates...", ch: ch}
+		ch <- updateMsg{target: "onnx", state: StateChecking, msg: "Checking for ONNX updates...", ch: ch}
 		release, err := runner.CheckLatestOnnxRelease()
 		if err != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to check for ONNX updates: %w", err), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("failed to check for ONNX updates: %w", err), ch: ch}
 			return
 		}
 
@@ -252,6 +254,7 @@ func (m *LifecycleModel) StartOnnxCheckOnly() tea.Cmd {
 		}
 
 		ch <- updateMsg{
+			target:  "onnx",
 			state:   state,
 			msg:     fmt.Sprintf("Latest available ONNX release: %s", release.TagName),
 			release: release,
@@ -268,26 +271,26 @@ func (m *LifecycleModel) StartUpdate() tea.Cmd {
 	go func() {
 		instances := m.srvRunner.GetAllInstances()
 		if len(instances) > 0 {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("cannot update: active server instances are running. Please stop all servers first."), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("cannot update: active server instances are running. Please stop all servers first."), ch: ch}
 			return
 		}
 
 		var release *runner.GithubRelease
 		var err error
-		if m.latestRelease != nil {
+		if m.latestRelease != nil && (strings.HasPrefix(m.latestTagName, "b") || strings.Contains(strings.ToLower(m.latestTagName), "llama")) {
 			release = m.latestRelease
 		} else {
-			ch <- updateMsg{state: StateChecking, msg: "Checking latest release on GitHub...", ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateChecking, msg: "Checking latest llama.cpp release on GitHub...", ch: ch}
 			release, err = runner.CheckLatestRelease()
 			if err != nil {
-				ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to check release: %w", err), ch: ch}
+				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to check release: %w", err), ch: ch}
 				return
 			}
 		}
 
 		mainAsset, cudartAsset, err := runner.MatchAsset(release, m.specs)
 		if err != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to match release asset: %w", err), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to match release asset: %w", err), ch: ch}
 			return
 		}
 
@@ -296,7 +299,7 @@ func (m *LifecycleModel) StartUpdate() tea.Cmd {
 			mainScale = 0.7
 		}
 
-		ch <- updateMsg{state: StateDownloading, progress: 0.0, msg: fmt.Sprintf("Downloading %s...", mainAsset.Name), ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateDownloading, progress: 0.0, msg: fmt.Sprintf("Downloading %s...", mainAsset.Name), ch: ch}
 
 		destFile := filepath.Join(m.config.Paths.Downloads, mainAsset.Name)
 		progressChan := make(chan float64, 5)
@@ -307,17 +310,17 @@ func (m *LifecycleModel) StartUpdate() tea.Cmd {
 		}()
 
 		for p := range progressChan {
-			ch <- updateMsg{state: StateDownloading, progress: p * mainScale, msg: fmt.Sprintf("Downloading %s (%.1f%%)...", mainAsset.Name, p*100.0), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateDownloading, progress: p * mainScale, msg: fmt.Sprintf("Downloading %s (%.1f%%)...", mainAsset.Name, p*100.0), ch: ch}
 		}
 
 		if derr := <-downloadErrChan; derr != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to download release: %w", derr), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to download release: %w", derr), ch: ch}
 			return
 		}
 
 		var destCudartFile string
 		if cudartAsset != nil {
-			ch <- updateMsg{state: StateDownloading, progress: 0.7, msg: fmt.Sprintf("Downloading %s...", cudartAsset.Name), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateDownloading, progress: 0.7, msg: fmt.Sprintf("Downloading %s...", cudartAsset.Name), ch: ch}
 			destCudartFile = filepath.Join(m.config.Paths.Downloads, cudartAsset.Name)
 			cudartProgressChan := make(chan float64, 5)
 
@@ -328,59 +331,60 @@ func (m *LifecycleModel) StartUpdate() tea.Cmd {
 
 			for p := range cudartProgressChan {
 				combinedProgress := 0.7 + (p * 0.3)
-				ch <- updateMsg{state: StateDownloading, progress: combinedProgress, msg: fmt.Sprintf("Downloading %s (%.1f%%)...", cudartAsset.Name, p*100.0), ch: ch}
+				ch <- updateMsg{target: "llamacpp", state: StateDownloading, progress: combinedProgress, msg: fmt.Sprintf("Downloading %s (%.1f%%)...", cudartAsset.Name, p*100.0), ch: ch}
 			}
 
 			if derr := <-cudartDownloadErrChan; derr != nil {
-				ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to download cudart release: %w", derr), ch: ch}
+				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to download cudart release: %w", derr), ch: ch}
 				return
 			}
 		}
 
-		ch <- updateMsg{state: StateExtracting, msg: "Creating backup of existing llama.cpp...", ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: "Creating backup of existing llama.cpp...", ch: ch}
 		backupDir := m.config.Paths.LlamaCPP + ".backup"
 
 		if _, err := os.Stat(m.config.Paths.LlamaCPP); err == nil {
 			err = runner.CreateBackup(m.config.Paths.LlamaCPP, backupDir)
 			if err != nil {
-				ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to create backup: %w", err), ch: ch}
+				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to create backup: %w", err), ch: ch}
 				return
 			}
 		}
 
-		ch <- updateMsg{state: StateExtracting, msg: "Extracting updated binaries...", ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: "Extracting updated binaries...", ch: ch}
 		_ = os.MkdirAll(m.config.Paths.LlamaCPP, 0755)
 		err = runner.ExtractArchive(destFile, m.config.Paths.LlamaCPP)
 		if err != nil {
 			_ = runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("extraction failed (rolled back): %w", err), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("extraction failed (rolled back): %w", err), ch: ch}
 			return
 		}
 		_ = os.Remove(destFile)
 
 		if destCudartFile != "" {
-			ch <- updateMsg{state: StateExtracting, msg: "Extracting CUDA runtime DLLs...", ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: "Extracting CUDA runtime DLLs...", ch: ch}
 			err = runner.ExtractArchive(destCudartFile, m.config.Paths.LlamaCPP)
 			if err != nil {
 				_ = runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
-				ch <- updateMsg{state: StateError, err: fmt.Errorf("CUDA DLLs extraction failed (rolled back): %w", err), ch: ch}
+				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("CUDA DLLs extraction failed (rolled back): %w", err), ch: ch}
 				return
 			}
 			_ = os.Remove(destCudartFile)
 		}
 
-		ch <- updateMsg{state: StateVerifying, msg: "Verifying installation...", ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateVerifying, msg: "Verifying installation...", ch: ch}
 		version, commit, buildInfo, err := runner.QueryLocalVersion(m.config.Paths.LlamaCPP)
 		if err != nil {
 			_ = runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("verification failed (rolled back): %w", err), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("verification failed (rolled back): %w", err), ch: ch}
 			return
 		}
 
 		ch <- updateMsg{
-			state: StateUpdateSuccess,
-			msg:   fmt.Sprintf("Update successful! Version: %s, Commit: %s (%s)", version, commit, buildInfo),
-			ch:    ch,
+			target: "llamacpp",
+			state:  StateUpdateSuccess,
+			msg:    fmt.Sprintf("Update successful! Version: %s, Commit: %s (%s)", version, commit, buildInfo),
+			ch:     ch,
 		}
 	}()
 
@@ -393,7 +397,7 @@ func (m *LifecycleModel) StartOnnxUpdate() tea.Cmd {
 	go func() {
 		instances := m.srvRunner.GetAllInstances()
 		if len(instances) > 0 {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("cannot install ONNX: active server instances are running. Please stop all servers first."), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("cannot install ONNX: active server instances are running. Please stop all servers first."), ch: ch}
 			return
 		}
 
@@ -402,21 +406,21 @@ func (m *LifecycleModel) StartOnnxUpdate() tea.Cmd {
 		if m.onnxLatestRelease != nil {
 			release = m.onnxLatestRelease
 		} else {
-			ch <- updateMsg{state: StateChecking, msg: "Checking latest ONNX release on GitHub...", ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateChecking, msg: "Checking latest ONNX release on GitHub...", ch: ch}
 			release, err = runner.CheckLatestOnnxRelease()
 			if err != nil {
-				ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to check ONNX release: %w", err), ch: ch}
+				ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("failed to check ONNX release: %w", err), ch: ch}
 				return
 			}
 		}
 
 		onnxAsset, err := runner.MatchOnnxAsset(release, m.specs)
 		if err != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to match ONNX release asset: %w", err), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("failed to match ONNX release asset: %w", err), ch: ch}
 			return
 		}
 
-		ch <- updateMsg{state: StateDownloading, progress: 0.0, msg: fmt.Sprintf("Downloading %s...", onnxAsset.Name), ch: ch}
+		ch <- updateMsg{target: "onnx", state: StateDownloading, progress: 0.0, msg: fmt.Sprintf("Downloading %s...", onnxAsset.Name), ch: ch}
 
 		progressChan := make(chan float64, 5)
 		downloadErrChan := make(chan error, 1)
@@ -431,18 +435,19 @@ func (m *LifecycleModel) StartOnnxUpdate() tea.Cmd {
 		}()
 
 		for p := range progressChan {
-			ch <- updateMsg{state: StateDownloading, progress: p, msg: fmt.Sprintf("Downloading %s (%.1f%%)...", onnxAsset.Name, p*100.0), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateDownloading, progress: p, msg: fmt.Sprintf("Downloading %s (%.1f%%)...", onnxAsset.Name, p*100.0), ch: ch}
 		}
 
 		if derr := <-downloadErrChan; derr != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("failed to install ONNX Runtime: %w", derr), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("failed to install ONNX Runtime: %w", derr), ch: ch}
 			return
 		}
 
 		ch <- updateMsg{
-			state: StateUpdateSuccess,
-			msg:   fmt.Sprintf("ONNX Runtime library installed successfully! Version: %s", release.TagName),
-			ch:    ch,
+			target: "onnx",
+			state:  StateUpdateSuccess,
+			msg:    fmt.Sprintf("ONNX Runtime library installed successfully! Version: %s", release.TagName),
+			ch:     ch,
 		}
 	}()
 
@@ -455,20 +460,20 @@ func (m *LifecycleModel) StartRollback() tea.Cmd {
 	go func() {
 		instances := m.srvRunner.GetAllInstances()
 		if len(instances) > 0 {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("cannot rollback: active server instances are running. Please stop all servers first."), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("cannot rollback: active server instances are running. Please stop all servers first."), ch: ch}
 			return
 		}
 
-		ch <- updateMsg{state: StateRollingBack, msg: "Restoring backup version...", ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateRollingBack, msg: "Restoring backup version...", ch: ch}
 		backupDir := m.config.Paths.LlamaCPP + ".backup"
 
 		err := runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
 		if err != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("rollback failed: %w", err), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("rollback failed: %w", err), ch: ch}
 			return
 		}
 
-		ch <- updateMsg{state: StateRollbackSuccess, msg: "Rollback completed successfully!", ch: ch}
+		ch <- updateMsg{target: "llamacpp", state: StateRollbackSuccess, msg: "Rollback completed successfully!", ch: ch}
 	}()
 
 	return m.ReadUpdateChan(ch)
@@ -480,20 +485,20 @@ func (m *LifecycleModel) StartOnnxRollback() tea.Cmd {
 	go func() {
 		instances := m.srvRunner.GetAllInstances()
 		if len(instances) > 0 {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("cannot rollback ONNX: active server instances are running. Please stop all servers first."), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("cannot rollback ONNX: active server instances are running. Please stop all servers first."), ch: ch}
 			return
 		}
 
-		ch <- updateMsg{state: StateRollingBack, msg: "Restoring ONNX backup version...", ch: ch}
+		ch <- updateMsg{target: "onnx", state: StateRollingBack, msg: "Restoring ONNX backup version...", ch: ch}
 		backupDir := m.config.Paths.OnnxRuntime + ".backup"
 
 		err := runner.RollbackBackup(backupDir, m.config.Paths.OnnxRuntime)
 		if err != nil {
-			ch <- updateMsg{state: StateError, err: fmt.Errorf("ONNX rollback failed: %w", err), ch: ch}
+			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("ONNX rollback failed: %w", err), ch: ch}
 			return
 		}
 
-		ch <- updateMsg{state: StateRollbackSuccess, msg: "ONNX rollback completed successfully!", ch: ch}
+		ch <- updateMsg{target: "onnx", state: StateRollbackSuccess, msg: "ONNX rollback completed successfully!", ch: ch}
 	}()
 
 	return m.ReadUpdateChan(ch)
@@ -631,10 +636,12 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 		}
 
 		if msg.release != nil {
-			if m.updatingRuntime == "onnx" {
+			if msg.target == "onnx" || (msg.target == "" && m.updatingRuntime == "onnx") {
 				m.onnxLatestRelease = msg.release
 				m.onnxLatestVersion = msg.release.TagName
-			} else {
+			} else if msg.target == "app" || (msg.target == "" && m.updatingRuntime == "app") {
+				m.appLatestTag = msg.release.TagName
+			} else if msg.target == "llamacpp" || (msg.target == "" && m.updatingRuntime == "llamacpp") {
 				m.latestRelease = msg.release
 				m.latestTagName = msg.release.TagName
 			}
