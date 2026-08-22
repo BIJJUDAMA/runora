@@ -2,6 +2,7 @@ package runner
 
 import (
 	"archive/zip"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,25 +11,52 @@ import (
 	"github.com/BIJJUDAMA/runora/hardware"
 )
 
-func TestLiveCheckLatestRelease(t *testing.T) {
-	rel, err := CheckLatestRelease()
+func TestResolveLlamaCppStableRelease(t *testing.T) {
+	rel, err := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
 	if err != nil {
-		t.Fatalf("CheckLatestRelease failed: %v", err)
+		t.Fatalf("fetchLatestRelease failed: %v", err)
 	}
-	t.Logf("Selected llama.cpp release: Tag=%s, Name=%s, Assets=%d", rel.TagName, rel.Name, len(rel.Assets))
+	t.Logf("Latest release: %s", rel.TagName)
 
-	specsWinCUDA := &hardware.HardwareSpecs{
-		OS: "Windows",
-		GPU: hardware.GPUSpecs{
-			Type:        "CUDA",
-			CudaVersion: "13",
-		},
+	// Check if nightly-tag.txt exists
+	var nightlyTagURL string
+	for _, a := range rel.Assets {
+		if a.Name == "nightly-tag.txt" {
+			nightlyTagURL = a.BrowserDownloadURL
+			break
+		}
 	}
-	mainAsset, cudartAsset, err := MatchAsset(rel, specsWinCUDA)
-	if err != nil {
-		t.Fatalf("MatchAsset failed: %v", err)
+
+	if nightlyTagURL != "" {
+		resp, err := http.Get(nightlyTagURL)
+		if err != nil {
+			t.Fatalf("failed to fetch nightly-tag: %v", err)
+		}
+		defer resp.Body.Close()
+		buf := make([]byte, 64)
+		n, _ := resp.Body.Read(buf)
+		nightlyTag := strings.TrimSpace(string(buf[:n]))
+		t.Logf("Found nightly tag: %s", nightlyTag)
+
+		tagRel, err := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/" + nightlyTag)
+		if err != nil {
+			t.Fatalf("failed to fetch tag release %s: %v", nightlyTag, err)
+		}
+		t.Logf("Tag release %s has %d assets", tagRel.TagName, len(tagRel.Assets))
+
+		specsWinCUDA := &hardware.HardwareSpecs{
+			OS: "Windows",
+			GPU: hardware.GPUSpecs{
+				Type:        "CUDA",
+				CudaVersion: "13",
+			},
+		}
+		mainAsset, cudartAsset, err := MatchAsset(tagRel, specsWinCUDA)
+		if err != nil {
+			t.Fatalf("MatchAsset failed: %v", err)
+		}
+		t.Logf("Matched main: %s, Cudart: %s", mainAsset.Name, cudartAsset.Name)
 	}
-	t.Logf("Matched main asset: %s, Cudart: %+v", mainAsset.Name, cudartAsset)
 }
 
 func TestMatchAsset(t *testing.T) {

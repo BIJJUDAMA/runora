@@ -90,17 +90,46 @@ func QueryLocalVersion(llamaCppDir string) (version string, commit string, build
 }
 
 // CheckLatestRelease queries GitHub API for the latest llama.cpp release.
-// Since llama.cpp publishes continuous builds (bXXXX) as releases, querying
-// /releases?per_page=10 guarantees finding the latest build with release assets.
+// Starting with v0.2.0, llama.cpp publishes stable semantic releases (vX.Y.Z)
+// which reference the corresponding binary build tag inside nightly-tag.txt.
 func CheckLatestRelease() (*GithubRelease, error) {
-	releases, err := fetchReleasesList("https://api.github.com/repos/ggerganov/llama.cpp/releases?per_page=10")
-	if err == nil && len(releases) > 0 {
-		for _, r := range releases {
-			if len(r.Assets) > 0 && strings.HasPrefix(strings.ToLower(r.TagName), "b") {
-				return &r, nil
+	rel, err := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
+	if err == nil {
+		hasBinaries := false
+		var nightlyTagURL string
+		for _, a := range rel.Assets {
+			nameLower := strings.ToLower(a.Name)
+			if strings.HasSuffix(nameLower, ".zip") || strings.HasSuffix(nameLower, ".tar.gz") || strings.HasSuffix(nameLower, ".tgz") {
+				if !strings.Contains(nameLower, "source") {
+					hasBinaries = true
+				}
+			}
+			if a.Name == "nightly-tag.txt" {
+				nightlyTagURL = a.BrowserDownloadURL
 			}
 		}
-		// If no bXXXX tag found, pick the first release with assets
+
+		if hasBinaries {
+			return rel, nil
+		}
+
+		// If this is a stable semantic release referencing a nightly build via nightly-tag.txt
+		if nightlyTagURL != "" {
+			nightlyTag, tagErr := fetchTextFile(nightlyTagURL)
+			if tagErr == nil && nightlyTag != "" {
+				tagRel, tagRelErr := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/" + nightlyTag)
+				if tagRelErr == nil && len(tagRel.Assets) > 0 {
+					tagRel.TagName = rel.TagName
+					tagRel.Name = fmt.Sprintf("%s (%s)", rel.TagName, nightlyTag)
+					return tagRel, nil
+				}
+			}
+		}
+	}
+
+	// Fallback to releases list if latest release could not be resolved
+	releases, listErr := fetchReleasesList("https://api.github.com/repos/ggerganov/llama.cpp/releases?per_page=10")
+	if listErr == nil && len(releases) > 0 {
 		for _, r := range releases {
 			if len(r.Assets) > 0 {
 				return &r, nil
@@ -109,7 +138,33 @@ func CheckLatestRelease() (*GithubRelease, error) {
 		return &releases[0], nil
 	}
 
-	return fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
+	if err != nil {
+		return nil, fmt.Errorf("failed to check latest release: %w", err)
+	}
+	return rel, nil
+}
+
+func fetchTextFile(url string) (string, error) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "runora-updater")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch text file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github returned status %s", resp.Status)
+	}
+
+	buf := make([]byte, 128)
+	n, _ := resp.Body.Read(buf)
+	return strings.TrimSpace(string(buf[:n])), nil
 }
 
 func fetchReleasesList(url string) ([]GithubRelease, error) {
