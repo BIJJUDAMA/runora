@@ -7,12 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [1.1.1] - 2026-08-22
 
 ### Added
+- Modular Theme Class architecture with CSS-variable-style semantic tokens and centralized stylesheet (global.css pattern).
 - Support for llama.cpp semantic versioning releases (vX.Y.Z) with automated nightly build tag resolution via nightly-tag.txt.
 - In-app configuration and environment variable support for GitHub API token (G hotkey) to increase release check limits from 60 to 5,000 req/hour.
 - Direct numeric hotkeys (1, 2, 3) to switch runtime focus in the Settings view.
 - Explicit inline available actions indicator for each runtime option card.
 
 ### Fixed
+- Eliminated all hardcoded colors from UI components in favor of dynamic theme tokens.
 - Resolved lifecycle message channel cross-contamination between runtime engines and application update checks.
 - Resolved Windows CUDA asset matching for upstream continuous builds.
 - Fixed column vertical separator alignment in the Preferences and Hardware info panel.

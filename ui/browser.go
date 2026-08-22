@@ -735,21 +735,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
 					}
 				case "y", "Y":
-					newTheme := "dracula"
-					switch strings.ToLower(m.config.Theme) {
-					case "dracula", "dark", "purple", "":
-						newTheme = "sunset"
-					case "sunset":
-						newTheme = "nord"
-					case "nord":
-						newTheme = "cyberpunk"
-					case "cyberpunk":
-						newTheme = "forest"
-					case "forest":
-						newTheme = "monochrome"
-					case "monochrome":
-						newTheme = "dracula"
-					}
+					newTheme := NextThemeName(m.config.Theme)
 					m.config.Theme = newTheme
 					_ = m.config.Save()
 					ApplyTheme(newTheme)
@@ -1141,16 +1127,16 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 	if m.hardwareSpecs != nil {
 		est := hardware.EstimateMemory(selectedModel, m.hardwareSpecs, 0)
 		var suitStr string
-		var suitabilityColor lipgloss.Color
+		var suitabilityColor lipgloss.TerminalColor
 		switch est.Suitability {
 		case hardware.SuitabilityFits:
-			suitStr = lipgloss.NewStyle().Background(ColorSecondary).Foreground(lipgloss.Color("#000000")).Bold(true).Padding(0, 1).Render(" FITS GPU ")
+			suitStr = StyleBadgeFits.Render(" FITS GPU ")
 			suitabilityColor = ColorSecondary
 		case hardware.SuitabilityPartial:
-			suitStr = lipgloss.NewStyle().Background(ColorGold).Foreground(lipgloss.Color("#000000")).Bold(true).Padding(0, 1).Render(" PARTIAL ")
+			suitStr = StyleBadgePartial.Render(" PARTIAL ")
 			suitabilityColor = ColorGold
 		case hardware.SuitabilityExceeds:
-			suitStr = lipgloss.NewStyle().Background(ColorDanger).Foreground(ColorWhite).Bold(true).Padding(0, 1).Render(" EXCEEDS ")
+			suitStr = StyleBadgeExceeds.Render(" EXCEEDS ")
 			suitabilityColor = ColorDanger
 		}
 
@@ -1247,7 +1233,7 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 	if isRunning {
 		sb.WriteString("\n  Active model is currently serving requests.\n")
 	} else if m.serverUIStatus == UIStatusFailed && m.runningModelPath == selectedModel.FilePath && m.serverErr != nil {
-		sb.WriteString(fmt.Sprintf("\n  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("#FF3B30")).Render(fmt.Sprintf("Error: %v", m.serverErr))))
+		sb.WriteString(fmt.Sprintf("\n  %s\n", StyleDanger.Render(fmt.Sprintf("Error: %v", m.serverErr))))
 	}
 	sb.WriteString("\n")
 
@@ -1399,7 +1385,7 @@ func (m *BrowserModel) View() string {
 
 			displayName := item.Label
 			if m.config.IsFavorite(mod.FilePath) {
-				starSymbol := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB800")).Render("★ ")
+				starSymbol := StyleStar.Render("★ ")
 				// Strip leading indent from nested elements to format properly
 				if strings.HasPrefix(displayName, "  ") {
 					displayName = "  " + starSymbol + strings.TrimPrefix(displayName, "  ")

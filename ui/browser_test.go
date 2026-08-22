@@ -777,6 +777,30 @@ func TestUnifiedLifecycleNavigation(t *testing.T) {
 	}
 }
 
+func TestThemeRegistryAndSwitching(t *testing.T) {
+	for _, theme := range registeredThemes {
+		if theme.ID() == "" {
+			t.Errorf("theme missing ID")
+		}
+		if theme.Name() == "" {
+			t.Errorf("theme missing Name")
+		}
+		p := theme.Palette()
+		if p.Primary == nil || p.Secondary == nil || p.Border == nil {
+			t.Errorf("theme %s has invalid palette", theme.Name())
+		}
+		ApplyTheme(theme.ID())
+		if ActiveTheme.ID() != theme.ID() {
+			t.Errorf("expected active theme %s, got %s", theme.ID(), ActiveTheme.ID())
+		}
+	}
+
+	next := NextThemeName("forest")
+	if next != "dracula" {
+		t.Errorf("expected next theme after forest to be dracula, got %s", next)
+	}
+}
+
 
 
 
