@@ -699,15 +699,15 @@ func (m *LifecycleModel) View(width int, height int) string {
 	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("SETTINGS & RUNTIME LIFECYCLE")))
 
 	// Helper styling for focus
-	renderHeader := func(index int, title string) string {
+	renderHeader := func(index int, numStr, title string) string {
 		if m.SelectedRuntime == index {
-			return lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("  ▶ [●] " + title + " (Focused)")
+			return lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf("  ▶ [●] %s. %s (Focused)", numStr, title))
 		}
-		return lipgloss.NewStyle().Bold(true).Render("    [○] " + title)
+		return lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("    [○] %s. %s", numStr, title))
 	}
 
 	// ── 1. llama.cpp Runtime ──────────────────────────────────────────────────
-	sb.WriteString(renderHeader(0, "Inference Runtime (llama.cpp)") + "\n")
+	sb.WriteString(renderHeader(0, "1", "Inference Runtime (llama.cpp)") + "\n")
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Folder Path:", m.config.Paths.LlamaCPP))
 
 	localVerStr := m.localVersion
@@ -731,10 +731,11 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else {
 		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check  •  [U/Space] Install/Update  •  [R] Rollback")))
 	sb.WriteString("\n")
 
 	// ── 2. ONNX Runtime Library ──────────────────────────────────────────────
-	sb.WriteString(renderHeader(1, "ONNX Runtime Library") + "\n")
+	sb.WriteString(renderHeader(1, "2", "ONNX Runtime Library") + "\n")
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Folder Path:", m.config.Paths.OnnxRuntime))
 
 	onnxVerStr := m.onnxLocalVersion
@@ -756,10 +757,11 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else {
 		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check  •  [U/Space] Install/Update  •  [R] Rollback")))
 	sb.WriteString("\n")
 
 	// ── 3. Runora App ────────────────────────────────────────────────────────
-	sb.WriteString(renderHeader(2, "Runora CLI Application") + "\n")
+	sb.WriteString(renderHeader(2, "3", "Runora CLI Application") + "\n")
 	appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Installed Version:", appVerStr))
 	if m.appChecking {
@@ -783,6 +785,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else {
 		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check  •  [U/Space] Update App")))
 	sb.WriteString("\n")
 
 	// ── Preferences & Hardware ───────────────────────────────────────────────
@@ -793,13 +796,21 @@ func (m *LifecycleModel) View(width int, height int) string {
 	if !m.config.OnboardingCompleted {
 		onboardStr = lipgloss.NewStyle().Foreground(ColorAccent).Render("Not completed")
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s   │   %-18s %s\n", "Color Theme:", themeStr, "Operating System:", m.specs.OS))
+
 	gpuDesc := m.specs.GPU.Type
 	if m.specs.GPU.Type == "CUDA" && m.specs.GPU.CudaVersion != "" {
 		gpuDesc += fmt.Sprintf(" (CUDA %s)", m.specs.GPU.CudaVersion)
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s   │   %-18s %s\n", "HF Token:", tokenStr, "GPU Accelerator:", gpuDesc))
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Onboarding Tour:", onboardStr))
+
+	col1Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "Color Theme:", themeStr))
+	col1Right := fmt.Sprintf("%-20s %s", "Operating System:", m.specs.OS)
+	sb.WriteString(fmt.Sprintf("%s │   %s\n", col1Left, col1Right))
+
+	col2Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "HF Token:", tokenStr))
+	col2Right := fmt.Sprintf("%-20s %s", "GPU Accelerator:", gpuDesc)
+	sb.WriteString(fmt.Sprintf("%s │   %s\n", col2Left, col2Right))
+
+	sb.WriteString(fmt.Sprintf("      %-18s %s\n", "Onboarding Tour:", onboardStr))
 	sb.WriteString("\n")
 
 	// ── Runtime status ───────────────────────────────────────────────────────
@@ -849,7 +860,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 	// ── Unified Help footer ───────────────────────────────────────────────────
 	var helpKeys []string
 	if m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[Tab/↑↓]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[1-3 / Tab/↑↓]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Check", StyleHelpKey.Render("[C/Enter]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Update/Install", StyleHelpKey.Render("[U/Space]")))
 		if m.hasBackup {

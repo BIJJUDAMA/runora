@@ -695,6 +695,12 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "esc":
 					m.screenMode = ScreenBrowser
 					m.rebuildSidebar()
+				case "1":
+					m.lifecycleModel.SelectedRuntime = 0
+				case "2":
+					m.lifecycleModel.SelectedRuntime = 1
+				case "3":
+					m.lifecycleModel.SelectedRuntime = 2
 				case "tab", "down", "j":
 					m.lifecycleModel.NextRuntime()
 				case "shift+tab", "up":
@@ -924,9 +930,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "u", "U":
 				m.lifecycleModel.RefreshLocalVersion()
 				m.lifecycleModel.RefreshBackupStatus()
-				m.lifecycleModel.updatingRuntime = "llamacpp"
 				m.screenMode = ScreenSettings
-				cmds = append(cmds, m.lifecycleModel.StartCheckOnly())
 
 			case "d", "D":
 				m.downloaderModel.focus = FocusURL
