@@ -695,30 +695,38 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "esc":
 					m.screenMode = ScreenBrowser
 					m.rebuildSidebar()
-				case "c", "C":
+				case "tab", "down", "j":
+					m.lifecycleModel.NextRuntime()
+				case "shift+tab", "up":
+					m.lifecycleModel.PrevRuntime()
+				case "enter", "c", "C":
 					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						m.lifecycleModel.updatingRuntime = "llamacpp"
-						cmds = append(cmds, m.lifecycleModel.StartCheckOnly())
+						cmds = append(cmds, m.lifecycleModel.StartCheckSelected())
 					}
-				case "u", "U":
+				case " ", "u", "U":
 					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						m.lifecycleModel.updatingRuntime = "llamacpp"
-						cmds = append(cmds, m.lifecycleModel.StartUpdate())
+						cmds = append(cmds, m.lifecycleModel.StartUpdateSelected())
+					}
+				case "r", "R":
+					if m.lifecycleModel.hasBackup && m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+						cmd := m.lifecycleModel.StartRollbackSelected()
+						if cmd != nil {
+							cmds = append(cmds, cmd)
+						}
 					}
 				case "k", "K":
+					// Direct ONNX check fallback
 					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+						m.lifecycleModel.SelectedRuntime = 1
 						m.lifecycleModel.updatingRuntime = "onnx"
 						cmds = append(cmds, m.lifecycleModel.StartOnnxCheckOnly())
 					}
 				case "o", "O":
+					// Direct ONNX update fallback
 					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+						m.lifecycleModel.SelectedRuntime = 1
 						m.lifecycleModel.updatingRuntime = "onnx"
 						cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
-					}
-				case "r", "R":
-					if m.lifecycleModel.hasBackup && m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						m.lifecycleModel.updatingRuntime = "llamacpp"
-						cmds = append(cmds, m.lifecycleModel.StartRollback())
 					}
 				case "y", "Y":
 					newTheme := "dracula"
@@ -746,10 +754,12 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				case "v", "V":
 					if !m.lifecycleModel.appChecking {
+						m.lifecycleModel.SelectedRuntime = 2
 						cmds = append(cmds, m.lifecycleModel.StartAppCheck())
 					}
 				case "a", "A":
 					if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
+						m.lifecycleModel.SelectedRuntime = 2
 						cmds = append(cmds, m.lifecycleModel.StartAppUpdate())
 					}
 				case "n", "N":

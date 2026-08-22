@@ -731,6 +731,53 @@ func TestFindAvailablePort(t *testing.T) {
 	}
 }
 
+func TestUnifiedLifecycleNavigation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+
+	// Transition to settings screen
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenSettings {
+		t.Fatalf("expected screenMode to be ScreenSettings, got %d", bm.screenMode)
+	}
+
+	if bm.lifecycleModel.SelectedRuntime != 0 {
+		t.Errorf("expected initial SelectedRuntime to be 0 (llama.cpp), got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
+	// Press Tab to cycle to ONNX Runtime (1)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 1 {
+		t.Errorf("expected SelectedRuntime to be 1 after Tab, got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
+	// Press Tab to cycle to Runora App (2)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 2 {
+		t.Errorf("expected SelectedRuntime to be 2 after Tab, got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
+	// Press Tab again to wrap back to llama.cpp (0)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 0 {
+		t.Errorf("expected SelectedRuntime to wrap to 0, got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
+	// Press Up arrow to move backwards to Runora App (2)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyUp})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 2 {
+		t.Errorf("expected SelectedRuntime to be 2 after Up arrow, got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+}
+
+
 
 
 

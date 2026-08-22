@@ -63,6 +63,8 @@ type LifecycleModel struct {
 	actionMsg        string
 	err              error
 	hasBackup        bool
+	hasLlamaBackup   bool
+	hasOnnxBackup    bool
 	width, height    int
 	tokenInput       textinput.Model
 	tokenEditActive  bool
@@ -80,7 +82,10 @@ type LifecycleModel struct {
 	onnxLocalVersion  string
 	onnxLatestVersion string
 	onnxLatestRelease *runner.GithubRelease
-	updatingRuntime   string // "llamacpp", "onnx", or ""
+	updatingRuntime   string // "llamacpp", "onnx", or "app"
+
+	// Selected runtime for unified controls (0: llama.cpp, 1: ONNX, 2: Runora App)
+	SelectedRuntime int
 }
 
 func resolveAppVersion() string {
@@ -113,16 +118,26 @@ func NewLifecycleModel(cfg *config.Config, srv runner.ModelRuntime) *LifecycleMo
 		tokenInput:      ti,
 		tokenEditActive: false,
 		appVersion:      resolveAppVersion(),
+		SelectedRuntime: 0,
 	}
 	m.RefreshLocalVersion()
 	m.RefreshBackupStatus()
 	return m
 }
 
+func (m *LifecycleModel) NextRuntime() {
+	m.SelectedRuntime = (m.SelectedRuntime + 1) % 3
+}
+
+func (m *LifecycleModel) PrevRuntime() {
+	m.SelectedRuntime = (m.SelectedRuntime + 2) % 3
+}
+
 // StartAppCheck queries GitHub for the latest llama-manager release tag.
 func (m *LifecycleModel) StartAppCheck() tea.Cmd {
 	m.appChecking = true
 	m.appCheckErr = nil
+	m.updatingRuntime = "app"
 	return func() tea.Msg {
 		rel, err := runner.CheckAppRelease()
 		if err != nil {
@@ -142,6 +157,7 @@ func (m *LifecycleModel) StartAppUpdate() tea.Cmd {
 	m.appUpdating = true
 	m.appUpdateErr = nil
 	m.appUpdateSuccess = false
+	m.updatingRuntime = "app"
 	return func() tea.Msg {
 		cmd := exec.Command("go", "install", "github.com/BIJJUDAMA/runora/cmd/runora@latest")
 		output, err := cmd.CombinedOutput()
@@ -173,12 +189,17 @@ func (m *LifecycleModel) RefreshLocalVersion() {
 }
 
 func (m *LifecycleModel) RefreshBackupStatus() {
-	backupDir := m.config.Paths.LlamaCPP + ".backup"
-	if _, err := os.Stat(backupDir); err == nil {
-		m.hasBackup = true
-	} else {
-		m.hasBackup = false
+	llamaBackup := m.config.Paths.LlamaCPP + ".backup"
+	onnxBackup := m.config.Paths.OnnxRuntime + ".backup"
+	m.hasLlamaBackup = false
+	m.hasOnnxBackup = false
+	if _, err := os.Stat(llamaBackup); err == nil {
+		m.hasLlamaBackup = true
 	}
+	if _, err := os.Stat(onnxBackup); err == nil {
+		m.hasOnnxBackup = true
+	}
+	m.hasBackup = m.hasLlamaBackup || m.hasOnnxBackup
 }
 
 func (m *LifecycleModel) StartCheckOnly() tea.Cmd {
@@ -453,6 +474,80 @@ func (m *LifecycleModel) StartRollback() tea.Cmd {
 	return m.ReadUpdateChan(ch)
 }
 
+func (m *LifecycleModel) StartOnnxRollback() tea.Cmd {
+	ch := make(chan updateMsg)
+
+	go func() {
+		instances := m.srvRunner.GetAllInstances()
+		if len(instances) > 0 {
+			ch <- updateMsg{state: StateError, err: fmt.Errorf("cannot rollback ONNX: active server instances are running. Please stop all servers first."), ch: ch}
+			return
+		}
+
+		ch <- updateMsg{state: StateRollingBack, msg: "Restoring ONNX backup version...", ch: ch}
+		backupDir := m.config.Paths.OnnxRuntime + ".backup"
+
+		err := runner.RollbackBackup(backupDir, m.config.Paths.OnnxRuntime)
+		if err != nil {
+			ch <- updateMsg{state: StateError, err: fmt.Errorf("ONNX rollback failed: %w", err), ch: ch}
+			return
+		}
+
+		ch <- updateMsg{state: StateRollbackSuccess, msg: "ONNX rollback completed successfully!", ch: ch}
+	}()
+
+	return m.ReadUpdateChan(ch)
+}
+
+// StartCheckSelected checks updates for the currently focused runtime component.
+func (m *LifecycleModel) StartCheckSelected() tea.Cmd {
+	switch m.SelectedRuntime {
+	case 1: // ONNX
+		m.updatingRuntime = "onnx"
+		return m.StartOnnxCheckOnly()
+	case 2: // App
+		m.updatingRuntime = "app"
+		return m.StartAppCheck()
+	default: // llama.cpp
+		m.updatingRuntime = "llamacpp"
+		return m.StartCheckOnly()
+	}
+}
+
+// StartUpdateSelected downloads and updates the currently focused runtime component.
+func (m *LifecycleModel) StartUpdateSelected() tea.Cmd {
+	switch m.SelectedRuntime {
+	case 1: // ONNX
+		m.updatingRuntime = "onnx"
+		return m.StartOnnxUpdate()
+	case 2: // App
+		m.updatingRuntime = "app"
+		return m.StartAppUpdate()
+	default: // llama.cpp
+		m.updatingRuntime = "llamacpp"
+		return m.StartUpdate()
+	}
+}
+
+// StartRollbackSelected rolls back the currently focused runtime component.
+func (m *LifecycleModel) StartRollbackSelected() tea.Cmd {
+	switch m.SelectedRuntime {
+	case 1: // ONNX
+		if m.hasOnnxBackup {
+			m.updatingRuntime = "onnx"
+			return m.StartOnnxRollback()
+		}
+	case 2: // App
+		return nil
+	default: // llama.cpp
+		if m.hasLlamaBackup {
+			m.updatingRuntime = "llamacpp"
+			return m.StartRollback()
+		}
+	}
+	return nil
+}
+
 func (m *LifecycleModel) ReadUpdateChan(ch chan updateMsg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
@@ -594,41 +689,19 @@ func (m *LifecycleModel) View(width int, height int) string {
 
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("SETTINGS")))
+	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("SETTINGS & RUNTIME LIFECYCLE")))
 
-	// ── App Version ──────────────────────────────────────────────────────────
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Runora:") + "\n")
-	appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Installed Version:", appVerStr))
-	if m.appChecking {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")))
-	} else if m.appCheckErr != nil {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", StyleDanger.Render("Check failed")))
-	} else if m.appLatestTag != "" {
-		if m.appUpdateSuccess {
-			sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
-			sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Status:", StyleSuccess.Render(m.appUpdateMsg)))
-		} else if m.appLatestTag == m.appVersion {
-			sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
-		} else {
-			sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag+" — update available")))
-			if m.appUpdating {
-				sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Status:", lipgloss.NewStyle().Foreground(ColorAccent).Render("Installing update...")))
-			} else if m.appUpdateErr != nil {
-				sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Status:", StyleDanger.Render(fmt.Sprintf("Update failed: %v", m.appUpdateErr))))
-				sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Press:", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[A] to retry update")))
-			} else {
-				sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Press:", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[A] to install update")))
-			}
+	// Helper styling for focus
+	renderHeader := func(index int, title string) string {
+		if m.SelectedRuntime == index {
+			return lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("  ▶ [●] " + title + " (Focused)")
 		}
-	} else {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  [V] to check")))
+		return lipgloss.NewStyle().Bold(true).Render("    [○] " + title)
 	}
-	sb.WriteString("\n")
 
-	// ── llama.cpp Installation ───────────────────────────────────────────────
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Inference Runtime (llama.cpp):") + "\n")
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Folder Path:", m.config.Paths.LlamaCPP))
+	// ── 1. llama.cpp Runtime ──────────────────────────────────────────────────
+	sb.WriteString(renderHeader(0, "Inference Runtime (llama.cpp)") + "\n")
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Folder Path:", m.config.Paths.LlamaCPP))
 
 	localVerStr := m.localVersion
 	if localVerStr != "Not Installed" && localVerStr != "Unknown" {
@@ -636,26 +709,26 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else if localVerStr == "Not Installed" {
 		localVerStr = StyleDanger.Render(localVerStr)
 	}
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Version Tag:", localVerStr))
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Commit Hash:", m.localCommit))
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Compiler/Build:", m.localBuildInfo))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Version Tag:", localVerStr))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Commit Hash:", m.localCommit))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Compiler/Build:", m.localBuildInfo))
 
 	backupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
-	if m.hasBackup {
+	if m.hasLlamaBackup {
 		backupStr = StyleSuccess.Render("Available (llama.cpp.backup/)")
 	}
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Local Backup:", backupStr))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Local Backup:", backupStr))
 
 	if m.latestTagName != "" {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName)))
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName)))
 	} else {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  [C] to check")))
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
 	sb.WriteString("\n")
 
-	// ── ONNX Runtime Installation ───────────────────────────────────────────
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("ONNX Runtime Library:") + "\n")
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Folder Path:", m.config.Paths.OnnxRuntime))
+	// ── 2. ONNX Runtime Library ──────────────────────────────────────────────
+	sb.WriteString(renderHeader(1, "ONNX Runtime Library") + "\n")
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Folder Path:", m.config.Paths.OnnxRuntime))
 
 	onnxVerStr := m.onnxLocalVersion
 	if onnxVerStr != "Not Installed" && !strings.Contains(onnxVerStr, "Unknown") {
@@ -663,35 +736,63 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else if onnxVerStr == "Not Installed" {
 		onnxVerStr = StyleDanger.Render(onnxVerStr)
 	}
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Installed Version:", onnxVerStr))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Installed Version:", onnxVerStr))
+
+	onnxBackupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
+	if m.hasOnnxBackup {
+		onnxBackupStr = StyleSuccess.Render("Available (onnxruntime.backup/)")
+	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Local Backup:", onnxBackupStr))
 
 	if m.onnxLatestVersion != "" {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.onnxLatestVersion)))
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.onnxLatestVersion)))
 	} else {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  [K] to check")))
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
 	sb.WriteString("\n")
 
-	// ── Preferences ──────────────────────────────────────────────────────────
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Preferences:") + "\n")
+	// ── 3. Runora App ────────────────────────────────────────────────────────
+	sb.WriteString(renderHeader(2, "Runora CLI Application") + "\n")
+	appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Installed Version:", appVerStr))
+	if m.appChecking {
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")))
+	} else if m.appCheckErr != nil {
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", StyleDanger.Render("Check failed")))
+	} else if m.appLatestTag != "" {
+		if m.appUpdateSuccess {
+			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
+			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Status:", StyleSuccess.Render(m.appUpdateMsg)))
+		} else if m.appLatestTag == m.appVersion {
+			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
+		} else {
+			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag+" — update available")))
+			if m.appUpdating {
+				sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Status:", lipgloss.NewStyle().Foreground(ColorAccent).Render("Installing update...")))
+			} else if m.appUpdateErr != nil {
+				sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Status:", StyleDanger.Render(fmt.Sprintf("Update failed: %v", m.appUpdateErr))))
+			}
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
+	}
+	sb.WriteString("\n")
+
+	// ── Preferences & Hardware ───────────────────────────────────────────────
+	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Preferences & Hardware:") + "\n")
 	themeStr := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(strings.Title(m.config.Theme))
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Color Theme:", themeStr))
 	tokenStr := maskToken(m.config.HFToken)
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "HF Token:", tokenStr))
 	onboardStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Completed")
 	if !m.config.OnboardingCompleted {
 		onboardStr = lipgloss.NewStyle().Foreground(ColorAccent).Render("Not completed")
 	}
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Onboarding Tour:", onboardStr))
-	sb.WriteString("\n")
-
-	// ── Hardware ─────────────────────────────────────────────────────────────
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Platform:") + "\n")
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "Operating System:", m.specs.OS))
-	sb.WriteString(fmt.Sprintf("    %-20s %s\n", "GPU Accelerator:", m.specs.GPU.Type))
+	sb.WriteString(fmt.Sprintf("      %-20s %s   │   %-18s %s\n", "Color Theme:", themeStr, "Operating System:", m.specs.OS))
+	gpuDesc := m.specs.GPU.Type
 	if m.specs.GPU.Type == "CUDA" && m.specs.GPU.CudaVersion != "" {
-		sb.WriteString(fmt.Sprintf("    %-20s %s\n", "CUDA Version:", lipgloss.NewStyle().Foreground(ColorWhite).Render(m.specs.GPU.CudaVersion)))
+		gpuDesc += fmt.Sprintf(" (CUDA %s)", m.specs.GPU.CudaVersion)
 	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s   │   %-18s %s\n", "HF Token:", tokenStr, "GPU Accelerator:", gpuDesc))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Onboarding Tour:", onboardStr))
 	sb.WriteString("\n")
 
 	// ── Runtime status ───────────────────────────────────────────────────────
@@ -703,6 +804,8 @@ func (m *LifecycleModel) View(width int, height int) string {
 			targetName = "ONNX Runtime"
 		} else if m.updatingRuntime == "llamacpp" {
 			targetName = "llama.cpp"
+		} else if m.updatingRuntime == "app" {
+			targetName = "Runora App"
 		}
 
 		switch m.state {
@@ -711,11 +814,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		case StateNoUpdate:
 			statusText = StyleSuccess.Render(fmt.Sprintf("%s is up-to-date.", targetName))
 		case StateUpdateAvailable:
-			if m.updatingRuntime == "onnx" {
-				statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("ONNX Runtime update available — press [O] to apply.")
-			} else {
-				statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("llama.cpp update available — press [U] to apply.")
-			}
+			statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(fmt.Sprintf("%s update available — press [U] or [Space] to install.", targetName))
 		case StateDownloading:
 			statusText = fmt.Sprintf("Downloading %s: %s", targetName, m.actionMsg)
 		case StateExtracting:
@@ -740,25 +839,16 @@ func (m *LifecycleModel) View(width int, height int) string {
 		sb.WriteString("\n")
 	}
 
-	// ── Help footer ───────────────────────────────────────────────────────────
+	// ── Unified Help footer ───────────────────────────────────────────────────
 	var helpKeys []string
 	if m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Check llama.cpp", StyleHelpKey.Render("[C]")))
-		if m.latestTagName != "" {
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Update llama.cpp", StyleHelpKey.Render("[U]")))
-		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Check ONNX", StyleHelpKey.Render("[K]")))
-		if m.onnxLatestVersion != "" {
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Update ONNX", StyleHelpKey.Render("[O]")))
-		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Check App", StyleHelpKey.Render("[V]")))
-		if m.appLatestTag != "" && m.appLatestTag != m.appVersion && !m.appUpdating {
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Update App", StyleHelpKey.Render("[A]")))
-		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Cycle Theme", StyleHelpKey.Render("[Y]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[Tab/↑↓]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Check", StyleHelpKey.Render("[C/Enter]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Update/Install", StyleHelpKey.Render("[U/Space]")))
 		if m.hasBackup {
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")))
 		}
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Theme", StyleHelpKey.Render("[Y]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Reset Tour", StyleHelpKey.Render("[N]")))
 	}
