@@ -1,8 +1,17 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.1.1] - 2026-08-22
+
+### Added
+- Support for llama.cpp semantic versioning releases (vX.Y.Z) with automated nightly build tag resolution via nightly-tag.txt.
+
+### Fixed
+- Resolved lifecycle message channel cross-contamination between runtime engines and application update checks.
+- Resolved Windows CUDA asset matching for upstream continuous builds.
 
 ## [1.1.0] - 2026-08-22
 
