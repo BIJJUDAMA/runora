@@ -35,7 +35,8 @@ func (b *BenchmarkProgressModel) View(width int, height int) string {
 	var sb strings.Builder
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("MODEL BENCHMARK RUNNER")))
-	sb.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(b.ModelName)))
+	modelName := TruncateVisual(b.ModelName, max(20, width-14), "...")
+	sb.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelName)))
 
 	renderStep := func(stepName string, step BenchmarkProgressStep) string {
 		bullet := "[ ]"
@@ -132,17 +133,19 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 	if fastest == nil {
 		sb.WriteString("  No benchmark records found. Run a benchmark with " + StyleHelpKey.Render("[B]") + " in the browser.\n\n")
 	} else {
+		fastestName := TruncateVisual(fastest.ModelName, max(20, width-35), "...")
 		sb.WriteString(fmt.Sprintf("  %-20s %s (%.2f tokens/sec)\n",
 			"Fastest Model:",
-			lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(fastest.ModelName),
+			lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(fastestName),
 			fastest.TokensPerSec,
 		))
 
 		effStr := "N/A"
 		if efficient != nil {
 			ramGB := efficient.RAMUsageMB / 1024.0
+			effName := TruncateVisual(efficient.ModelName, max(20, width-45), "...")
 			effStr = fmt.Sprintf("%s (%.2f t/s per GB RAM)",
-				lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(efficient.ModelName),
+				lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(effName),
 				efficient.TokensPerSec/ramGB,
 			)
 		}
@@ -154,7 +157,11 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 		sb.WriteString(fmt.Sprintf("  %-10s %-16s %-12s %-10s %-10s\n",
 			"Date", "Model", "Speed", "Startup", "RAM/VRAM",
 		))
-		sb.WriteString("  " + strings.Repeat("─", width-8) + "\n")
+		divWidth := width - 8
+		if divWidth < 10 {
+			divWidth = 10
+		}
+		sb.WriteString("  " + strings.Repeat("─", divWidth) + "\n")
 
 		// Render rows
 		maxVisible := height - 16
@@ -179,10 +186,7 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 			r := d.History[i]
 			dateStr := r.RunDate.Format("01-02 15:04")
 
-			modelName := r.ModelName
-			if len(modelName) > 16 {
-				modelName = modelName[:13] + "..."
-			}
+			modelName := TruncateVisual(r.ModelName, 16, "...")
 
 			memInfo := fmt.Sprintf("%.1fG/%.1fG", r.RAMUsageMB/1024.0, r.VRAMUsageMB/1024.0)
 
@@ -206,7 +210,7 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 		boxWidth = 50
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.DoubleBorder()).
 		BorderForeground(ColorPrimary).
 		Width(boxWidth).
 		Render(sb.String())

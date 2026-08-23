@@ -186,7 +186,7 @@ type startServerMsg struct {
 	err error
 }
 
-func startServerCmd(srv runner.ModelRuntime, llamaCppDir string, modelPath string, ctxSize uint32, threads int, gpuLayers int, batchSize int, host string, port int) tea.Cmd {
+func startServerCmd(srv runner.ModelRuntime, llamaCppDir string, modelPath string, ctxSize uint32, threads int, gpuLayers int, batchSize int, host string, port int, task runner.TaskType) tea.Cmd {
 	return func() tea.Msg {
 		err := srv.Start(modelPath, runner.StartOptions{
 			LlamaCppDir: llamaCppDir,
@@ -196,6 +196,7 @@ func startServerCmd(srv runner.ModelRuntime, llamaCppDir string, modelPath strin
 			BatchSize:   batchSize,
 			Host:        host,
 			Port:        port,
+			Task:        task,
 		})
 		return startServerMsg{err: err}
 	}
@@ -534,6 +535,22 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case MonitorTickMsg:
+		if m.screenMode == ScreenServerMonitor && m.monitorModel != nil {
+			cmd := m.monitorModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case MonitorMetricsMsg:
+		if m.monitorModel != nil {
+			cmd := m.monitorModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
 	case updateMsg:
 		if m.lifecycleModel != nil {
 			_, cmd := m.lifecycleModel.Update(msg)
@@ -543,6 +560,14 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case appCheckMsg:
+		if m.lifecycleModel != nil {
+			_, cmd := m.lifecycleModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case appUpdateMsg:
 		if m.lifecycleModel != nil {
 			_, cmd := m.lifecycleModel.Update(msg)
 			if cmd != nil {
@@ -643,6 +668,10 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					launchPort := findAvailablePort(p.Port, m.srvRunner, m.dashboard.Model.FilePath)
 					_ = m.srvRunner.StopInstance(launchPort)
 
+					var taskType runner.TaskType
+					if m.dashboard.Model != nil {
+						taskType = runner.TaskType(m.dashboard.Model.Task)
+					}
 					cmds = append(cmds, startServerCmd(
 						m.srvRunner,
 						m.config.Paths.LlamaCPP,
@@ -653,6 +682,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						p.BatchSize,
 						p.Host,
 						launchPort,
+						taskType,
 					))
 					cmds = append(cmds, checkHealthCmd(launchPort))
 				}
@@ -672,6 +702,14 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q", "ctrl+c":
 				m.screenMode = ScreenBrowser
+			case "up", "k":
+				if m.perfDashboard.Cursor > 0 {
+					m.perfDashboard.Cursor--
+				}
+			case "down", "j":
+				if len(m.perfDashboard.History) > 0 && m.perfDashboard.Cursor < len(m.perfDashboard.History)-1 {
+					m.perfDashboard.Cursor++
+				}
 			}
 		} else if m.screenMode == ScreenServerMonitor && m.monitorModel != nil {
 			switch msg.String() {
@@ -910,8 +948,8 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "m", "M":
-				m.monitorModel.Refresh()
 				m.screenMode = ScreenServerMonitor
+				cmds = append(cmds, m.monitorModel.PollMetricsCmd(), MonitorTickCmd())
 
 			case "u", "U":
 				m.lifecycleModel.RefreshLocalVersion()
@@ -1129,14 +1167,17 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 		var suitStr string
 		var suitabilityColor lipgloss.TerminalColor
 		switch est.Suitability {
-		case hardware.SuitabilityFits:
-			suitStr = StyleBadgeFits.Render(" FITS GPU ")
+		case hardware.SuitabilityFitsVRAM:
+			suitStr = StyleBadgeFits.Render(" FITS VRAM ")
 			suitabilityColor = ColorSecondary
-		case hardware.SuitabilityPartial:
-			suitStr = StyleBadgePartial.Render(" PARTIAL ")
+		case hardware.SuitabilityPartialVRAM:
+			suitStr = StyleBadgePartial.Render(" PARTIAL VRAM ")
 			suitabilityColor = ColorGold
+		case hardware.SuitabilityFitsRAM:
+			suitStr = StyleBadgeFits.Render(" FITS RAM (CPU) ")
+			suitabilityColor = ColorSecondary
 		case hardware.SuitabilityExceeds:
-			suitStr = StyleBadgeExceeds.Render(" EXCEEDS ")
+			suitStr = StyleBadgeExceeds.Render(" EXCEEDS RAM ")
 			suitabilityColor = ColorDanger
 		}
 
@@ -1194,6 +1235,9 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 		}
 
 		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "KV Cache:", formatSize(int64(est.KVCacheSize))))
+		if est.ActivationSize > 0 {
+			sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Activation:", formatSize(int64(est.ActivationSize))))
+		}
 		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Overhead:", formatSize(int64(est.Overhead))))
 		sb.WriteString(fmt.Sprintf("  %-16s %s (GPU offload: %d%%)\n", "Total Memory:", formatSize(int64(est.TotalMemory)), est.GPUOffloadPct))
 		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Recommendation:", est.Reason))
@@ -1345,9 +1389,13 @@ func (m *BrowserModel) View() string {
 
 			if item.Type == ItemFolderHeader {
 				folderLabel := item.Label
+				selWidth := leftWidth - 2
+				if selWidth < 10 {
+					selWidth = 10
+				}
 				if idx == m.selected {
 					leftSb.WriteString(
-						StyleSelectedListItem.Width(leftWidth - 2).Render(
+						StyleSelectedListItem.Width(selWidth).Render(
 							fmt.Sprintf("  %s", folderLabel),
 						) + "\n",
 					)
@@ -1367,10 +1415,12 @@ func (m *BrowserModel) View() string {
 			if m.hardwareSpecs != nil {
 				est := hardware.EstimateMemory(mod, m.hardwareSpecs, 0)
 				switch est.Suitability {
-				case hardware.SuitabilityFits:
+				case hardware.SuitabilityFitsVRAM:
 					bulletStyled = StyleSuccess.Render(bullet)
-				case hardware.SuitabilityPartial:
+				case hardware.SuitabilityPartialVRAM:
 					bulletStyled = StyleWarning.Render(bullet)
+				case hardware.SuitabilityFitsRAM:
+					bulletStyled = lipgloss.NewStyle().Foreground(ColorSecondary).Render(bullet)
 				case hardware.SuitabilityExceeds:
 					bulletStyled = StyleDanger.Render(bullet)
 				}
@@ -1383,25 +1433,38 @@ func (m *BrowserModel) View() string {
 				isRunningStr = "▶ "
 			}
 
-			displayName := item.Label
-			if m.config.IsFavorite(mod.FilePath) {
-				starSymbol := StyleStar.Render("★ ")
-				// Strip leading indent from nested elements to format properly
-				if strings.HasPrefix(displayName, "  ") {
-					displayName = "  " + starSymbol + strings.TrimPrefix(displayName, "  ")
-				} else {
-					displayName = starSymbol + displayName
-				}
+			rawName := item.Label
+			isFavorite := m.config.IsFavorite(mod.FilePath)
+
+			indent := ""
+			if strings.HasPrefix(rawName, "  ") {
+				indent = "  "
+				rawName = strings.TrimPrefix(rawName, "  ")
 			}
 
-			maxNameLen := leftWidth - 8
-			if maxNameLen > 0 && len(displayName) > maxNameLen {
-				displayName = displayName[:maxNameLen-3] + "..."
+			maxNameLen := leftWidth - 10
+			if isFavorite {
+				maxNameLen -= 2
+			}
+			if maxNameLen < 4 {
+				maxNameLen = 4
+			}
+			rawName = TruncateVisual(rawName, maxNameLen, "...")
+
+			var displayName string
+			if isFavorite {
+				displayName = indent + StyleStar.Render("★ ") + rawName
+			} else {
+				displayName = indent + rawName
 			}
 
+			selWidth := leftWidth - 2
+			if selWidth < 10 {
+				selWidth = 10
+			}
 			if idx == m.selected {
 				leftSb.WriteString(
-					StyleSelectedListItem.Width(leftWidth - 2).Render(
+					StyleSelectedListItem.Width(selWidth).Render(
 						fmt.Sprintf("%s%s %s", isRunningStr, bullet, displayName),
 					) + "\n",
 				)
