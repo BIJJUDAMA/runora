@@ -1793,17 +1793,22 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 		}
 	}
 
-	leftView := SurfaceCard("Models", leftSb.String(), leftWidth, !m.focusRight, fmt.Sprintf("%d models", len(m.models)))
+	leftView := SurfaceCardWithHeight("Models", leftSb.String(), leftWidth, panelHeight, !m.focusRight, fmt.Sprintf("%d models", len(m.models)))
 
 	var rightView string
 	if len(m.sidebarItems) == 0 || m.selected < 0 || m.selected >= len(m.sidebarItems) || m.sidebarItems[m.selected].Type != ItemModelEntry {
-		rightView = SurfaceCard("Model Details", "  No model selected.", rightWidth, m.focusRight, "")
+		rightView = SurfaceCardWithHeight("Model Details", "  No model selected.", rightWidth, panelHeight, m.focusRight, "")
 	} else {
 		selectedModel := m.models[m.sidebarItems[m.selected].ModelIdx]
 		shardCount := selectedModel.ShardCount
 		if shardCount == 0 {
 			shardCount = 1
 		}
+
+		// Calculate heights for right panel cards to fill panelHeight
+		h1 := panelHeight / 3
+		h2 := (panelHeight - h1) / 2
+		h3 := panelHeight - h1 - h2
 
 		// 1. Model Overview Card
 		var overviewSb strings.Builder
@@ -1839,7 +1844,7 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 			overviewSb.WriteString(fmt.Sprintf("  %s\n", StyleDanger.Render(fmt.Sprintf("Error: %v", m.serverErr))))
 		}
 
-		cardOverview := SurfaceCard("Model Details", overviewSb.String(), rightWidth, m.focusRight, selectedModel.Architecture)
+		cardOverview := SurfaceCardWithHeight("Model Details", overviewSb.String(), rightWidth, h1, m.focusRight, selectedModel.Architecture)
 
 		// 2. Hardware Fit Card
 		var fitSb strings.Builder
@@ -1936,7 +1941,7 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 			fitSb.WriteString("  Detecting hardware requirements...\n")
 		}
 
-		cardFit := SurfaceCard("Hardware Fit", fitSb.String(), rightWidth, false, suitabilityTier)
+		cardFit := SurfaceCardWithHeight("Hardware Fit", fitSb.String(), rightWidth, h2, false, suitabilityTier)
 
 		// 3. Parameters & Shards Card
 		var paramSb strings.Builder
@@ -1964,7 +1969,7 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 			paramSb.WriteString(fmt.Sprintf("  %-16s %d (KV: %d)\n", "Attention Heads:", selectedModel.Heads, selectedModel.HeadsKV))
 		}
 
-		cardParams := SurfaceCard("Parameters & Shards", paramSb.String(), rightWidth, false, fmt.Sprintf("%d shards", shardCount))
+		cardParams := SurfaceCardWithHeight("Parameters & Shards", paramSb.String(), rightWidth, h3, false, fmt.Sprintf("%d shards", shardCount))
 
 		rightView = lipgloss.JoinVertical(lipgloss.Left, cardOverview, cardFit, cardParams)
 	}
