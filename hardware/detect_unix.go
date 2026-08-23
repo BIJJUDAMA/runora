@@ -21,6 +21,7 @@ func DetectHardware() (*HardwareSpecs, error) {
 
 	// 1. CPU Detection
 	specs.CPU.Threads = runtime.NumCPU()
+	specs.CPU.PhysicalCores = getUnixCPUPhysicalCores()
 	specs.CPU.Model = getUnixCPUModel()
 
 	// 2. RAM Detection
@@ -29,20 +30,114 @@ func DetectHardware() (*HardwareSpecs, error) {
 	specs.RAM.Available = availRAM
 
 	// 3. GPU Detection
-	gpuName, gpuVRAM, gpuType := getUnixGPU(totalRAM)
-	specs.GPU.Name = gpuName
-	specs.GPU.VRAM = gpuVRAM
-	specs.GPU.Type = gpuType
+	gpus := getUnixGPUs(totalRAM)
+	specs.GPUs = gpus
+	if len(gpus) > 0 {
+		specs.GPU = gpus[0]
+	} else {
+		specs.GPU = GPUSpecs{
+			Name: "Integrated Graphics / CPU",
+			VRAM: 0,
+			Type: "CPU",
+		}
+		specs.GPUs = []GPUSpecs{specs.GPU}
+	}
 
-	if gpuType == "Metal" && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+	if specs.GPU.Type == "Metal" && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		specs.IsUnified = true
 	}
 
-	if gpuType == "CUDA" {
-		specs.GPU.CudaVersion = detectCudaVersion()
+	return specs, nil
+}
+
+
+func getUnixCPUPhysicalCores() int {
+	if runtime.GOOS == "linux" {
+		return getLinuxPhysicalCores()
+	} else if runtime.GOOS == "darwin" {
+		return getDarwinPhysicalCores()
+	}
+	threads := runtime.NumCPU()
+	if threads > 1 {
+		return threads / 2
+	}
+	return 1
+}
+
+func getLinuxPhysicalCores() int {
+	data, err := os.ReadFile("/proc/cpuinfo")
+	if err != nil {
+		threads := runtime.NumCPU()
+		if threads > 1 {
+			return threads / 2
+		}
+		return 1
 	}
 
-	return specs, nil
+	lines := strings.Split(string(data), "\n")
+	type coreKey struct {
+		physID string
+		coreID string
+	}
+	coreMap := make(map[coreKey]bool)
+	currentPhysID := "0"
+	currentCoreID := ""
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if currentCoreID != "" {
+				coreMap[coreKey{physID: currentPhysID, coreID: currentCoreID}] = true
+				currentPhysID = "0"
+				currentCoreID = ""
+			}
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		switch key {
+		case "physical id":
+			currentPhysID = val
+		case "core id":
+			currentCoreID = val
+		case "processor":
+			if currentCoreID == "" {
+				currentCoreID = val
+			}
+		}
+	}
+	if currentCoreID != "" {
+		coreMap[coreKey{physID: currentPhysID, coreID: currentCoreID}] = true
+	}
+	if len(coreMap) > 0 {
+		return len(coreMap)
+	}
+
+	threads := runtime.NumCPU()
+	if threads > 1 {
+		return threads / 2
+	}
+	return 1
+}
+
+func getDarwinPhysicalCores() int {
+	cmd := exec.Command("sysctl", "-n", "hw.physicalcpu")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err == nil {
+		if val, err := strconv.Atoi(strings.TrimSpace(out.String())); err == nil && val > 0 {
+			return val
+		}
+	}
+	threads := runtime.NumCPU()
+	if threads > 1 {
+		return threads / 2
+	}
+	return 1
 }
 
 func getUnixCPUModel() string {
@@ -115,22 +210,32 @@ func getUnixRAM() (uint64, uint64) {
 	return total, avail
 }
 
-func getUnixGPU(totalRAM uint64) (string, uint64, string) {
-	// Try running nvidia-smi
+func getUnixGPUs(totalRAM uint64) []GPUSpecs {
+	// Try running nvidia-smi for multi-GPU
 	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err == nil {
 		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		var gpus []GPUSpecs
+		cudaVer := detectCudaVersion()
 		for _, line := range lines {
 			parts := strings.Split(strings.TrimSpace(line), ",")
 			if len(parts) >= 2 {
 				name := strings.TrimSpace(parts[0])
 				vramMb, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
 				if err == nil && vramMb > 0 {
-					return name, vramMb * 1024 * 1024, "CUDA"
+					gpus = append(gpus, GPUSpecs{
+						Name:        name,
+						VRAM:        vramMb * 1024 * 1024,
+						Type:        "CUDA",
+						CudaVersion: cudaVer,
+					})
 				}
 			}
+		}
+		if len(gpus) > 0 {
+			return gpus
 		}
 	}
 
@@ -143,12 +248,29 @@ func getUnixGPU(totalRAM uint64) (string, uint64, string) {
 			if vram == 0 {
 				vram = uint64(float64(8*1024*1024*1024) * 0.67)
 			}
-			return "Apple Silicon GPU", vram, "Metal"
+			return []GPUSpecs{{
+				Name: "Apple Silicon GPU",
+				VRAM: vram,
+				Type: "Metal",
+			}}
 		}
 	}
 
+	return []GPUSpecs{{
+		Name: "Integrated Graphics / CPU",
+		VRAM: 0,
+		Type: "CPU",
+	}}
+}
+
+func getUnixGPU(totalRAM uint64) (string, uint64, string) {
+	gpus := getUnixGPUs(totalRAM)
+	if len(gpus) > 0 {
+		return gpus[0].Name, gpus[0].VRAM, gpus[0].Type
+	}
 	return "Integrated Graphics / CPU", 0, "CPU"
 }
+
 
 func detectCudaVersion() string {
 	// 1. Env variable check (e.g. CUDA_PATH or CUDA_HOME)
