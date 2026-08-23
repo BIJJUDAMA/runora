@@ -12,13 +12,17 @@ import (
 )
 
 type Profile struct {
-	Name      string `json:"name"`
-	Context   uint32 `json:"context"`
-	Threads   int    `json:"threads"`
-	GPULayers int    `json:"gpu_layers"`
-	BatchSize int    `json:"batch_size"`
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
+	Name           string `json:"name"`
+	Context        uint32 `json:"context"`
+	Threads        int    `json:"threads"`
+	GPULayers      int    `json:"gpu_layers"`
+	BatchSize      int    `json:"batch_size"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	FlashAttention bool   `json:"flash_attention"`
+	CacheTypeK     string `json:"cache_type_k,omitempty"`
+	CacheTypeV     string `json:"cache_type_v,omitempty"`
+	CustomArgs     string `json:"custom_args,omitempty"`
 }
 
 var reservedWindowsNames = map[string]bool{
@@ -103,77 +107,91 @@ func DefaultProfiles() []*Profile {
 
 	return []*Profile{
 		{
-			Name:      "Fast",
-			Context:   2048,
-			Threads:   threads,
-			GPULayers: 999, // default to offload as much as possible
-			BatchSize: 512,
-			Host:      "127.0.0.1",
-			Port:      50505,
+			Name:           "Fast",
+			Context:        2048,
+			Threads:        threads,
+			GPULayers:      999,
+			BatchSize:      512,
+			Host:           "127.0.0.1",
+			Port:           50505,
+			FlashAttention: true,
 		},
 		{
-			Name:      "Balanced",
-			Context:   4096,
-			Threads:   threads,
-			GPULayers: 999,
-			BatchSize: 512,
-			Host:      "127.0.0.1",
-			Port:      50505,
+			Name:           "Balanced",
+			Context:        4096,
+			Threads:        threads,
+			GPULayers:      999,
+			BatchSize:      512,
+			Host:           "127.0.0.1",
+			Port:           50505,
+			FlashAttention: true,
 		},
 		{
-			Name:      "High",
-			Context:   8192,
-			Threads:   threads,
-			GPULayers: 999,
-			BatchSize: 512,
-			Host:      "127.0.0.1",
-			Port:      50505,
+			Name:           "High",
+			Context:        8192,
+			Threads:        threads,
+			GPULayers:      999,
+			BatchSize:      512,
+			Host:           "127.0.0.1",
+			Port:           50505,
+			FlashAttention: true,
 		},
 		{
-			Name:      "Long Context",
-			Context:   16384,
-			Threads:   threads,
-			GPULayers: 999,
-			BatchSize: 512,
-			Host:      "127.0.0.1",
-			Port:      50505,
+			Name:           "Long Context",
+			Context:        16384,
+			Threads:        threads,
+			GPULayers:      999,
+			BatchSize:      512,
+			Host:           "127.0.0.1",
+			Port:           50505,
+			FlashAttention: true,
 		},
 		{
-			Name:      "CPU",
-			Context:   2048,
-			Threads:   runtime.NumCPU(),
-			GPULayers: 0,
-			BatchSize: 512,
-			Host:      "127.0.0.1",
-			Port:      50505,
+			Name:           "CPU",
+			Context:        2048,
+			Threads:        runtime.NumCPU(),
+			GPULayers:      0,
+			BatchSize:      512,
+			Host:           "127.0.0.1",
+			Port:           50505,
+			FlashAttention: true,
 		},
 	}
 }
 
 // LoadAll reads all profiles from the specified profiles directory, 
-// auto-generating defaults if no profile files exist.
+// auto-generating defaults only if no profile files exist.
 func LoadAll(profilesDir string) ([]*Profile, error) {
 	if err := os.MkdirAll(profilesDir, 0755); err != nil {
 		return nil, err
 	}
 
-	// Always ensure default profiles exist in the folder
-	defaults := DefaultProfiles()
-	for _, p := range defaults {
-		cleanName := SanitizeProfileName(p.Name)
-		fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
-		filePath := filepath.Join(profilesDir, fileName)
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	files, err := os.ReadDir(profilesDir)
+	if err != nil {
+		return nil, err
+	}
+
+	hasJSON := false
+	for _, file := range files {
+		if !file.IsDir() && filepath.Ext(file.Name()) == ".json" {
+			hasJSON = true
+			break
+		}
+	}
+
+	// Auto-seed default profiles only if directory has no profiles at all
+	if !hasJSON {
+		defaults := DefaultProfiles()
+		for _, p := range defaults {
+			cleanName := SanitizeProfileName(p.Name)
+			fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
+			filePath := filepath.Join(profilesDir, fileName)
 			data, err := json.MarshalIndent(p, "", "  ")
 			if err == nil {
 				_ = config.AtomicWriteFile(filePath, data, 0644)
 			}
 		}
-	}
-
-	files, err := os.ReadDir(profilesDir)
-	if err != nil {
-		return nil, err
+		files, _ = os.ReadDir(profilesDir)
 	}
 
 	var profiles []*Profile
@@ -227,13 +245,8 @@ func SaveProfile(profilesDir string, p *Profile) error {
 	return config.AtomicWriteFile(filePath, data, 0644)
 }
 
-// DeleteProfile deletes a custom profile file from the specified profiles directory.
-// Default built-in profiles cannot be deleted.
+// DeleteProfile deletes any profile file from the specified profiles directory.
 func DeleteProfile(profilesDir string, name string) error {
-	if IsDefaultProfile(name) {
-		return fmt.Errorf("cannot delete built-in default profile %q", name)
-	}
-
 	cleanName := SanitizeProfileName(name)
 	fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
 	targetPath := filepath.Join(profilesDir, fileName)

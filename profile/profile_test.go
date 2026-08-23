@@ -208,6 +208,15 @@ func TestProfileSaveAndDelete(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	// 1. Initial LoadAll seeds default profiles
+	profs, err := LoadAll(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load profiles: %v", err)
+	}
+	if len(profs) != 5 {
+		t.Fatalf("expected 5 default profiles, got %d", len(profs))
+	}
+
 	p := &Profile{
 		Name:      "My Custom Config",
 		Context:   4096,
@@ -222,27 +231,24 @@ func TestProfileSaveAndDelete(t *testing.T) {
 		t.Fatalf("failed to save profile: %v", err)
 	}
 
-	profs, err := LoadAll(tempDir)
-	if err != nil {
-		t.Fatalf("failed to load profiles: %v", err)
+	profsWithCustom, _ := LoadAll(tempDir)
+	if len(profsWithCustom) != 6 {
+		t.Fatalf("expected 6 profiles (5 defaults + 1 custom), got %d", len(profsWithCustom))
 	}
 
-	found := false
-	for _, loaded := range profs {
-		if loaded.Name == "My Custom Config" {
-			found = true
-			if loaded.Threads != 6 || loaded.GPULayers != 35 {
-				t.Errorf("profile data mismatch: %+v", loaded)
-			}
+	// Deleting default profile 'Fast' should now succeed (unrestricted deletion)
+	if err := DeleteProfile(tempDir, "Fast"); err != nil {
+		t.Errorf("expected deleting default profile 'Fast' to succeed, got error: %v", err)
+	}
+
+	profsAfterDelFast, _ := LoadAll(tempDir)
+	if len(profsAfterDelFast) != 5 {
+		t.Errorf("expected 5 profiles after deleting 'Fast', got %d", len(profsAfterDelFast))
+	}
+	for _, loaded := range profsAfterDelFast {
+		if loaded.Name == "Fast" {
+			t.Errorf("expected profile 'Fast' to be deleted from disk, but it was found")
 		}
-	}
-	if !found {
-		t.Fatalf("saved profile not found in loaded profiles")
-	}
-
-	// Deleting default profile must fail
-	if err := DeleteProfile(tempDir, "Fast"); err == nil {
-		t.Errorf("expected deleting default profile 'Fast' to return error, got nil")
 	}
 
 	// Deleting custom profile should succeed
@@ -251,10 +257,49 @@ func TestProfileSaveAndDelete(t *testing.T) {
 	}
 
 	profsAfter, _ := LoadAll(tempDir)
+	if len(profsAfter) != 4 {
+		t.Errorf("expected 4 profiles remaining, got %d", len(profsAfter))
+	}
 	for _, loaded := range profsAfter {
-		if loaded.Name == "My Custom Config" {
-			t.Errorf("expected custom profile to be deleted from disk, but it was found")
+		if loaded.Name == "My Custom Config" || loaded.Name == "Fast" {
+			t.Errorf("expected profile %q to be deleted from disk, but it was found", loaded.Name)
 		}
+	}
+}
+
+func TestProfileNewFields(t *testing.T) {
+	p := &Profile{
+		Name:           "Advanced Profile",
+		Context:        4096,
+		Threads:        8,
+		GPULayers:      999,
+		BatchSize:      512,
+		Host:           "127.0.0.1",
+		Port:           50505,
+		FlashAttention: true,
+		CacheTypeK:     "q8_0",
+		CacheTypeV:     "q8_0",
+		CustomArgs:     "--temp 0.7 --top-p 0.9",
+	}
+
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal profile: %v", err)
+	}
+
+	var p2 Profile
+	if err := json.Unmarshal(data, &p2); err != nil {
+		t.Fatalf("failed to unmarshal profile: %v", err)
+	}
+
+	if !p2.FlashAttention {
+		t.Errorf("expected FlashAttention to be true")
+	}
+	if p2.CacheTypeK != "q8_0" || p2.CacheTypeV != "q8_0" {
+		t.Errorf("expected KV cache types 'q8_0', got K=%q V=%q", p2.CacheTypeK, p2.CacheTypeV)
+	}
+	if p2.CustomArgs != "--temp 0.7 --top-p 0.9" {
+		t.Errorf("expected CustomArgs '--temp 0.7 --top-p 0.9', got %q", p2.CustomArgs)
 	}
 }
 
