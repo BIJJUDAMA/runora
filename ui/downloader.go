@@ -239,7 +239,9 @@ func (m *DownloaderModel) Update(msg tea.Msg) (*DownloaderModel, tea.Cmd) {
 			}
 
 		case "up", "k":
-			if m.focus == FocusFileList {
+			if m.focus == FocusURL || m.focus == FocusFilename {
+				m.prevFocus()
+			} else if m.focus == FocusFileList {
 				m.selectedFileIdx--
 				if m.selectedFileIdx < 0 {
 					m.selectedFileIdx = 0
@@ -248,7 +250,9 @@ func (m *DownloaderModel) Update(msg tea.Msg) (*DownloaderModel, tea.Cmd) {
 				m.moveCursor(-1)
 			}
 		case "down", "j":
-			if m.focus == FocusFileList {
+			if m.focus == FocusURL || m.focus == FocusFilename {
+				m.nextFocus()
+			} else if m.focus == FocusFileList {
 				m.selectedFileIdx++
 				if m.selectedFileIdx >= len(m.resolvedFiles) {
 					m.selectedFileIdx = len(m.resolvedFiles) - 1

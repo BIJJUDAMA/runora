@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/config"
+	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
@@ -266,8 +267,8 @@ func TestBrowserDownloaderDirectURL(t *testing.T) {
 		bm = m.(*BrowserModel)
 	}
 
-	// Tab to switch to filename field
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Down arrow to switch to filename field
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 
 	if bm.downloaderModel.focus != FocusFilename {
@@ -851,9 +852,9 @@ func TestBrowserDownloaderClearQueue(t *testing.T) {
 
 	// Move focus to download queue
 	// Focus transitions: FocusURL -> FocusFilename -> FocusQueue
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 
 	if bm.downloaderModel.focus != FocusQueue {
@@ -934,22 +935,22 @@ func TestUnifiedLifecycleNavigation(t *testing.T) {
 		t.Errorf("expected initial SelectedRuntime to be 0 (llama.cpp), got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Tab to cycle to ONNX Runtime (1)
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Press Down to cycle to ONNX Runtime (1)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 	if bm.lifecycleModel.SelectedRuntime != 1 {
-		t.Errorf("expected SelectedRuntime to be 1 after Tab, got %d", bm.lifecycleModel.SelectedRuntime)
+		t.Errorf("expected SelectedRuntime to be 1 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Tab to cycle to Runora App (2)
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Press Down to cycle to Runora App (2)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 	if bm.lifecycleModel.SelectedRuntime != 2 {
-		t.Errorf("expected SelectedRuntime to be 2 after Tab, got %d", bm.lifecycleModel.SelectedRuntime)
+		t.Errorf("expected SelectedRuntime to be 2 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Tab again to wrap back to llama.cpp (0)
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Press Down again to wrap back to llama.cpp (0)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 	if bm.lifecycleModel.SelectedRuntime != 0 {
 		t.Errorf("expected SelectedRuntime to wrap to 0, got %d", bm.lifecycleModel.SelectedRuntime)
@@ -1389,6 +1390,255 @@ func TestBrowserLogStreamerTrigger(t *testing.T) {
 
 	if bm.screenMode != ScreenBrowser {
 		t.Errorf("expected screenMode to return to ScreenBrowser on Esc, got %d", bm.screenMode)
+	}
+}
+
+func TestGlobalTopNavKeyRouting(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.onboardingActive = false
+	bm.llamaCPPMissingActive = false
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Llama-3-8B", FilePath: "models/llama3.gguf"},
+	}
+	bm.filterModels()
+	bm.screenMode = ScreenBrowser
+
+	// 1. Test Number Keys 1-6
+	// '2' -> ScreenDashboard
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenDashboard {
+		t.Errorf("expected key '2' to route to ScreenDashboard, got %d", bm.screenMode)
+	}
+	if bm.dashboard == nil {
+		t.Errorf("expected dashboard model to be initialized on switching to ScreenDashboard")
+	}
+
+	// '3' -> ScreenServerMonitor
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenServerMonitor {
+		t.Errorf("expected key '3' to route to ScreenServerMonitor, got %d", bm.screenMode)
+	}
+
+	// '4' -> ScreenDownloader
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenDownloader {
+		t.Errorf("expected key '4' to route to ScreenDownloader, got %d", bm.screenMode)
+	}
+
+	// '5' -> ScreenPerformanceDashboard
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenPerformanceDashboard {
+		t.Errorf("expected key '5' to route to ScreenPerformanceDashboard, got %d", bm.screenMode)
+	}
+
+	// '6' -> ScreenSettings
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenSettings {
+		t.Errorf("expected key '6' to route to ScreenSettings, got %d", bm.screenMode)
+	}
+
+	// '1' -> ScreenBrowser
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenBrowser {
+		t.Errorf("expected key '1' to route to ScreenBrowser, got %d", bm.screenMode)
+	}
+
+	// 2. Test Forward Cycling with Tab:
+	// ScreenBrowser (0) -> ScreenDashboard (1) -> ScreenServerMonitor (2) ->
+	// ScreenDownloader (3) -> ScreenPerformanceDashboard (4) -> ScreenSettings (5) -> ScreenBrowser (0)
+	expectedOrder := []ScreenMode{
+		ScreenDashboard,
+		ScreenServerMonitor,
+		ScreenDownloader,
+		ScreenPerformanceDashboard,
+		ScreenSettings,
+		ScreenBrowser,
+	}
+
+	for _, expected := range expectedOrder {
+		m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+		bm = m.(*BrowserModel)
+		if bm.screenMode != expected {
+			t.Errorf("expected Tab forward cycling to reach %d, got %d", expected, bm.screenMode)
+		}
+	}
+
+	// Test ']' key forward cycling
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenDashboard {
+		t.Errorf("expected ']' forward cycling to reach ScreenDashboard, got %d", bm.screenMode)
+	}
+
+	// 3. Test Backward Cycling with Shift+Tab:
+	// ScreenDashboard (1) -> ScreenBrowser (0) -> ScreenSettings (5) ->
+	// ScreenPerformanceDashboard (4) -> ScreenDownloader (3) -> ScreenServerMonitor (2) -> ScreenDashboard (1)
+	expectedBackOrder := []ScreenMode{
+		ScreenBrowser,
+		ScreenSettings,
+		ScreenPerformanceDashboard,
+		ScreenDownloader,
+		ScreenServerMonitor,
+		ScreenDashboard,
+	}
+
+	for _, expected := range expectedBackOrder {
+		m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+		bm = m.(*BrowserModel)
+		if bm.screenMode != expected {
+			t.Errorf("expected Shift+Tab backward cycling to reach %d, got %d", expected, bm.screenMode)
+		}
+	}
+
+	// Test '[' key backward cycling
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenBrowser {
+		t.Errorf("expected '[' backward cycling to reach ScreenBrowser, got %d", bm.screenMode)
+	}
+}
+
+func TestGlobalHeaderRendering(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.onboardingActive = false
+	bm.llamaCPPMissingActive = false
+	bm.width = 120
+	bm.height = 36
+
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Llama-3-8B-Q4_K_M", FilePath: "models/llama3.gguf"},
+	}
+	bm.filterModels()
+
+	bm.hardwareSpecs = &hardware.HardwareSpecs{
+		GPU: hardware.GPUSpecs{
+			Name: "NVIDIA GeForce RTX 4050 Laptop GPU",
+			VRAM: 6 * 1024 * 1024 * 1024,
+			Type: "CUDA",
+		},
+	}
+
+	// Helper to assert zero emojis in rendered string
+	assertZeroEmojis := func(screenName string, content string) {
+		for _, r := range content {
+			if (r >= 0x1F600 && r <= 0x1F64F) || // Emoticons
+				(r >= 0x1F300 && r <= 0x1F5FF) || // Misc Symbols and Pictographs
+				(r >= 0x1F680 && r <= 0x1F6FF) || // Transport and Map
+				(r >= 0x1F700 && r <= 0x1F77F) || // Alchemical Symbols
+				(r >= 0x1F780 && r <= 0x1F7FF) || // Geometric Shapes Extended
+				(r >= 0x1F800 && r <= 0x1F8FF) || // Supplemental Arrows-C
+				(r >= 0x1F900 && r <= 0x1F9FF) || // Supplemental Symbols and Pictographs
+				(r >= 0x1FA00 && r <= 0x1FA6F) || // Chess Symbols
+				(r >= 0x1FA70 && r <= 0x1FAFF) || // Symbols and Pictographs Extended-A
+				(r >= 0x2600 && r <= 0x26FF && r != 0x2605 && r != 0x2606) || // Misc symbols
+				(r >= 0x2700 && r <= 0x27BF && r != 0x2713 && r != 0x2717) { // Dingbats
+				t.Errorf("found emoji %q (code: %U) in screen %s", r, r, screenName)
+			}
+		}
+	}
+
+	screensToTest := []struct {
+		name string
+		mode ScreenMode
+		init func()
+	}{
+		{
+			name: "ScreenBrowser",
+			mode: ScreenBrowser,
+			init: func() {},
+		},
+		{
+			name: "ScreenDashboard",
+			mode: ScreenDashboard,
+			init: func() {
+				bm.dashboard = NewDashboardModel(bm.models[0], bm.hardwareSpecs, bm.profiles, "Balanced")
+			},
+		},
+		{
+			name: "ScreenServerMonitor",
+			mode: ScreenServerMonitor,
+			init: func() {
+				bm.monitorModel = NewMonitorModelWithConfig(srv, cfg, nil)
+			},
+		},
+		{
+			name: "ScreenDownloader",
+			mode: ScreenDownloader,
+			init: func() {
+				bm.downloaderModel = NewDownloaderModel(cfg, bm.downloadQueue)
+			},
+		},
+		{
+			name: "ScreenPerformanceDashboard",
+			mode: ScreenPerformanceDashboard,
+			init: func() {
+				bm.perfDashboard = NewPerformanceDashboardModel(nil)
+			},
+		},
+		{
+			name: "ScreenSettings",
+			mode: ScreenSettings,
+			init: func() {
+				bm.lifecycleModel = NewLifecycleModel(cfg, srv)
+			},
+		},
+		{
+			name: "ScreenBenchmarkProgress",
+			mode: ScreenBenchmarkProgress,
+			init: func() {
+				bm.benchmarkProgress = NewBenchmarkProgressModel("Llama-3-8B-Q4_K_M")
+			},
+		},
+		{
+			name: "ScreenProfileCreator",
+			mode: ScreenProfileCreator,
+			init: func() {
+				bm.profileCreatorModel = NewProfileCreatorModel("profiles")
+			},
+		},
+	}
+
+	for _, sc := range screensToTest {
+		t.Run(sc.name, func(t *testing.T) {
+			sc.init()
+			bm.screenMode = sc.mode
+			view := bm.View()
+
+			// Assert GlobalTabHeader presence
+			if !strings.Contains(view, "[1] Models") {
+				t.Errorf("screen %s missing '[1] Models' in header", sc.name)
+			}
+			if !strings.Contains(view, "[2] Launch") {
+				t.Errorf("screen %s missing '[2] Launch' in header", sc.name)
+			}
+			if !strings.Contains(view, "[4] Downloads") {
+				t.Errorf("screen %s missing '[4] Downloads' in header", sc.name)
+			}
+			if !strings.Contains(view, "[5] Bench") {
+				t.Errorf("screen %s missing '[5] Bench' in header", sc.name)
+			}
+			if !strings.Contains(view, "[6] Settings") {
+				t.Errorf("screen %s missing '[6] Settings' in header", sc.name)
+			}
+			if !strings.Contains(view, "RTX 4050") {
+				t.Errorf("screen %s missing 'RTX 4050' VRAM gauge in header", sc.name)
+			}
+
+			// Assert zero emojis
+			assertZeroEmojis(sc.name, view)
+		})
 	}
 }
 

@@ -207,6 +207,152 @@ func (m *BrowserModel) isModelRunning(filePath string) bool {
 	return false
 }
 
+func (m *BrowserModel) getRunningCount() int {
+	if m.srvRunner == nil {
+		return 0
+	}
+	return len(m.srvRunner.GetAllInstances())
+}
+
+func (m *BrowserModel) getVRAMGauge() string {
+	if m.hardwareSpecs == nil {
+		return ""
+	}
+	totalVRAM := m.hardwareSpecs.TotalVRAM()
+	if totalVRAM == 0 {
+		return ""
+	}
+	var usedVRAM uint64
+	if m.srvRunner != nil {
+		for _, inst := range m.srvRunner.GetAllInstances() {
+			for _, mod := range m.models {
+				if mod.FilePath == inst.ModelPath {
+					est := hardware.EstimateMemory(mod, m.hardwareSpecs, 0)
+					var used uint64
+					if m.hardwareSpecs.IsUnified {
+						used = est.TotalMemory
+					} else {
+						used = (est.WeightSize * uint64(est.GPUOffloadPct) / 100)
+						if est.GPUOffloadPct > 0 {
+							used += est.KVCacheSize + est.Overhead
+						}
+					}
+					if used > totalVRAM {
+						used = totalVRAM
+					}
+					usedVRAM += used
+					break
+				}
+			}
+		}
+	}
+	if usedVRAM > totalVRAM {
+		usedVRAM = totalVRAM
+	}
+
+	pct := 0.0
+	if totalVRAM > 0 {
+		pct = (float64(usedVRAM) / float64(totalVRAM)) * 100.0
+	}
+
+	gpuName := m.hardwareSpecs.GPU.Name
+	if gpuName == "" {
+		gpuName = "GPU"
+	}
+	gpuName = strings.TrimPrefix(gpuName, "NVIDIA GeForce ")
+	gpuName = strings.TrimPrefix(gpuName, "NVIDIA ")
+	gpuName = strings.TrimSpace(gpuName)
+
+	usedGB := float64(usedVRAM) / (1024 * 1024 * 1024)
+	totalGB := float64(totalVRAM) / (1024 * 1024 * 1024)
+
+	bar := RenderProgressBar(pct, 8, ColorPrimary)
+	return fmt.Sprintf("%s [%s] %.1f/%.1f GB", gpuName, bar, usedGB, totalGB)
+}
+
+func (m *BrowserModel) navigateToScreen(target ScreenMode) tea.Cmd {
+	var cmds []tea.Cmd
+	m.screenMode = target
+	switch target {
+	case ScreenBrowser:
+		m.rebuildSidebar()
+	case ScreenDashboard:
+		if m.dashboard == nil || (m.selected >= 0 && m.selected < len(m.sidebarItems) && m.sidebarItems[m.selected].Type == ItemModelEntry && (m.dashboard.Model == nil || m.dashboard.Model.FilePath != m.sidebarItems[m.selected].ModelPath)) {
+			var selectedModel *model.GGUFMetadata
+			if m.selected >= 0 && m.selected < len(m.sidebarItems) {
+				item := m.sidebarItems[m.selected]
+				if item.Type == ItemModelEntry && item.ModelIdx >= 0 && item.ModelIdx < len(m.models) {
+					selectedModel = m.models[item.ModelIdx]
+				}
+			}
+			if selectedModel == nil && len(m.models) > 0 {
+				selectedModel = m.models[0]
+			}
+			if selectedModel != nil {
+				profName := m.config.ModelProfiles[selectedModel.FilePath]
+				if profName == "" {
+					profName = "Balanced"
+				}
+				m.dashboard = NewDashboardModel(selectedModel, m.hardwareSpecs, m.profiles, profName)
+			}
+		}
+	case ScreenServerMonitor:
+		if m.monitorModel != nil {
+			cmds = append(cmds, m.monitorModel.PollMetricsCmd(), MonitorTickCmd())
+		}
+	case ScreenDownloader:
+		if m.downloaderModel != nil {
+			m.downloaderModel.focus = FocusURL
+			m.downloaderModel.urlInput.Focus()
+		}
+	case ScreenPerformanceDashboard:
+		history, err := benchmark.LoadHistory(m.config.Paths.Benchmarks)
+		if err == nil {
+			m.perfDashboard = NewPerformanceDashboardModel(history)
+		}
+	case ScreenSettings:
+		if m.lifecycleModel != nil {
+			m.lifecycleModel.RefreshLocalVersion()
+			m.lifecycleModel.RefreshBackupStatus()
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *BrowserModel) cycleScreen(direction int) tea.Cmd {
+	mainScreens := []ScreenMode{
+		ScreenBrowser,              // 0
+		ScreenDashboard,            // 1
+		ScreenServerMonitor,        // 2
+		ScreenDownloader,           // 3
+		ScreenPerformanceDashboard, // 4
+		ScreenSettings,             // 5
+	}
+
+	currentIndex := 0
+	switch m.screenMode {
+	case ScreenBrowser:
+		currentIndex = 0
+	case ScreenDashboard, ScreenProfileCreator:
+		currentIndex = 1
+	case ScreenServerMonitor, ScreenLogStreamer:
+		currentIndex = 2
+	case ScreenDownloader:
+		currentIndex = 3
+	case ScreenPerformanceDashboard, ScreenBenchmarkProgress:
+		currentIndex = 4
+	case ScreenSettings:
+		currentIndex = 5
+	}
+
+	nextIndex := (currentIndex + direction) % len(mainScreens)
+	if nextIndex < 0 {
+		nextIndex += len(mainScreens)
+	}
+
+	return m.navigateToScreen(mainScreens[nextIndex])
+}
+
 type discoverMsg struct {
 	models []*model.GGUFMetadata
 	err    error
@@ -907,6 +1053,109 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickCmd())
 
 	case tea.KeyMsg:
+		// 1. Search input in Model Browser screen
+		if m.searchActive {
+			switch msg.String() {
+			case "enter":
+				m.searchActive = false
+				m.searchInput.Blur()
+			case "esc":
+				m.searchActive = false
+				m.searchInput.SetValue("")
+				m.searchInput.Blur()
+				m.filterModels()
+			default:
+				var cmd tea.Cmd
+				m.searchInput, cmd = m.searchInput.Update(msg)
+				cmds = append(cmds, cmd)
+				m.filterModels()
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		// 2. Token input in Settings screen
+		if m.screenMode == ScreenSettings && m.lifecycleModel != nil && m.lifecycleModel.tokenEditActive {
+			_, cmd := m.lifecycleModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		// 3. Downloader active text input (when actively typing in URL or Filename field)
+		downloaderEditing := m.screenMode == ScreenDownloader && m.downloaderModel != nil &&
+			(m.downloaderModel.urlInput.Value() != "" || m.downloaderModel.filenameInput.Value() != "" || m.downloaderModel.focus == FocusFilename)
+		if downloaderEditing {
+			switch msg.String() {
+			case "esc":
+				if m.downloaderModel.focus == FocusFileList {
+					m.downloaderModel.resolvedFiles = nil
+					m.downloaderModel.repoID = ""
+					m.downloaderModel.focus = FocusURL
+					m.downloaderModel.urlInput.Focus()
+				} else {
+					m.downloaderModel.urlInput.Blur()
+					m.downloaderModel.filenameInput.Blur()
+					m.screenMode = ScreenBrowser
+					m.rebuildSidebar()
+				}
+				return m, nil
+			default:
+				_, cmd := m.downloaderModel.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		// 4. Global Top Navigation & Keymap Routing (when text inputs & modals are not focused)
+		switch msg.String() {
+		case "1":
+			return m, m.navigateToScreen(ScreenBrowser)
+		case "2":
+			return m, m.navigateToScreen(ScreenDashboard)
+		case "3":
+			return m, m.navigateToScreen(ScreenServerMonitor)
+		case "4":
+			return m, m.navigateToScreen(ScreenDownloader)
+		case "5":
+			return m, m.navigateToScreen(ScreenPerformanceDashboard)
+		case "6":
+			return m, m.navigateToScreen(ScreenSettings)
+		case "tab", "]":
+			return m, m.cycleScreen(1)
+		case "shift+tab", "[":
+			return m, m.cycleScreen(-1)
+		case "q", "ctrl+c":
+			_ = m.srvRunner.Stop()
+			return m, tea.Quit
+		}
+
+		// 4. Screen-Specific Key Handling
+		if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
+			switch msg.String() {
+			case "esc":
+				if m.downloaderModel.focus == FocusFileList {
+					m.downloaderModel.resolvedFiles = nil
+					m.downloaderModel.repoID = ""
+					m.downloaderModel.focus = FocusURL
+					m.downloaderModel.urlInput.Focus()
+				} else {
+					m.downloaderModel.urlInput.Blur()
+					m.downloaderModel.filenameInput.Blur()
+					m.screenMode = ScreenBrowser
+					m.rebuildSidebar()
+				}
+				return m, nil
+			default:
+				_, cmd := m.downloaderModel.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+		}
 		if m.screenMode == ScreenDashboard && m.dashboard != nil {
 			switch msg.String() {
 			case "left", "h":
@@ -1016,7 +1265,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.screenMode == ScreenPerformanceDashboard && m.perfDashboard != nil {
 			switch msg.String() {
-			case "esc", "q", "ctrl+c":
+			case "esc":
 				m.screenMode = ScreenBrowser
 			case "up", "k":
 				if m.perfDashboard.Cursor > 0 {
@@ -1047,87 +1296,65 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if m.screenMode == ScreenSettings && m.lifecycleModel != nil {
-			if m.lifecycleModel.tokenEditActive {
+			switch msg.String() {
+			case "esc":
+				m.screenMode = ScreenBrowser
+				m.rebuildSidebar()
+			case "down", "j":
+				m.lifecycleModel.NextRuntime()
+			case "up", "k", "K":
+				m.lifecycleModel.PrevRuntime()
+			case "enter", "c", "C":
+				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+					cmds = append(cmds, m.lifecycleModel.StartCheckSelected())
+				}
+			case " ", "u", "U":
+				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+					cmds = append(cmds, m.lifecycleModel.StartUpdateSelected())
+				}
+			case "r", "R":
+				if m.lifecycleModel.hasBackup && m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+					cmd := m.lifecycleModel.StartRollbackSelected()
+					if cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+				}
+			case "o", "O":
+				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
+					m.lifecycleModel.SelectedRuntime = 1
+					m.lifecycleModel.updatingRuntime = "onnx"
+					cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
+				}
+			case "y", "Y":
+				m.themePicker = NewThemePickerModel(m.config.Theme)
+				m.themePickerActive = true
+			case "s", "S", "b", "B", "t", "T", "g", "G":
 				_, cmd := m.lifecycleModel.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			} else {
-				switch msg.String() {
-				case "esc":
-					m.screenMode = ScreenBrowser
-					m.rebuildSidebar()
-				case "1":
-					m.lifecycleModel.SelectedRuntime = 0
-				case "2":
-					m.lifecycleModel.SelectedRuntime = 1
-				case "3":
-					m.lifecycleModel.SelectedRuntime = 2
-				case "tab", "down", "j":
-					m.lifecycleModel.NextRuntime()
-				case "shift+tab", "up":
-					m.lifecycleModel.PrevRuntime()
-				case "enter", "c", "C":
-					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						cmds = append(cmds, m.lifecycleModel.StartCheckSelected())
+			case "v", "V":
+				if m.lifecycleModel.SelectedRuntime == 2 {
+					if !m.lifecycleModel.appChecking {
+						cmds = append(cmds, m.lifecycleModel.StartAppCheck())
 					}
-				case " ", "u", "U":
-					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						cmds = append(cmds, m.lifecycleModel.StartUpdateSelected())
-					}
-				case "r", "R":
-					if m.lifecycleModel.hasBackup && m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						cmd := m.lifecycleModel.StartRollbackSelected()
-						if cmd != nil {
-							cmds = append(cmds, cmd)
-						}
-					}
-				case "k", "K":
-					// Direct ONNX check fallback
-					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						m.lifecycleModel.SelectedRuntime = 1
-						m.lifecycleModel.updatingRuntime = "onnx"
-						cmds = append(cmds, m.lifecycleModel.StartOnnxCheckOnly())
-					}
-				case "o", "O":
-					// Direct ONNX update fallback
-					if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-						m.lifecycleModel.SelectedRuntime = 1
-						m.lifecycleModel.updatingRuntime = "onnx"
-						cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
-					}
-				case "y", "Y":
-					m.themePicker = NewThemePickerModel(m.config.Theme)
-					m.themePickerActive = true
-				case "s", "S", "b", "B", "t", "T", "g", "G":
+				} else {
 					_, cmd := m.lifecycleModel.Update(msg)
 					if cmd != nil {
 						cmds = append(cmds, cmd)
 					}
-				case "v", "V":
-					if m.lifecycleModel.SelectedRuntime == 2 {
-						if !m.lifecycleModel.appChecking {
-							cmds = append(cmds, m.lifecycleModel.StartAppCheck())
-						}
-					} else {
-						_, cmd := m.lifecycleModel.Update(msg)
-						if cmd != nil {
-							cmds = append(cmds, cmd)
-						}
-					}
-				case "a", "A":
-					if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
-						m.lifecycleModel.SelectedRuntime = 2
-						cmds = append(cmds, m.lifecycleModel.StartAppUpdate())
-					}
-				case "n", "N":
-					// Reset onboarding tour
-					m.config.OnboardingCompleted = false
-					_ = m.config.Save()
-					m.onboardingActive = true
-					m.onboardingStep = StepWelcome
-					m.screenMode = ScreenBrowser
 				}
+			case "a", "A":
+				if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
+					m.lifecycleModel.SelectedRuntime = 2
+					cmds = append(cmds, m.lifecycleModel.StartAppUpdate())
+				}
+			case "n", "N":
+				m.config.OnboardingCompleted = false
+				_ = m.config.Save()
+				m.onboardingActive = true
+				m.onboardingStep = StepWelcome
+				m.screenMode = ScreenBrowser
 			}
 		} else if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
 			switch msg.String() {
@@ -1149,49 +1376,21 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, cmd)
 				}
 			}
-		} else if m.searchActive {
+		} else if m.screenMode == ScreenBrowser {
 			switch msg.String() {
-			case "enter":
-				m.searchActive = false
-				m.searchInput.Blur()
-			case "esc":
-				m.searchActive = false
-				m.searchInput.SetValue("")
-				m.searchInput.Blur()
-				m.filterModels()
-			default:
-				var cmd tea.Cmd
-				m.searchInput, cmd = m.searchInput.Update(msg)
-				cmds = append(cmds, cmd)
-				m.filterModels()
-			}
-		} else if !m.onboardingActive {
-			switch msg.String() {
-			case "q", "ctrl+c":
-				_ = m.srvRunner.Stop()
-				return m, tea.Quit
-
-			case "tab", "shift+tab":
-				m.focusRight = !m.focusRight
-
 			case "right":
 				m.focusRight = true
-
 			case "left", "h":
 				m.focusRight = false
-
 			case "up", "k":
 				m.moveSelection(-1)
-
 			case "down", "j":
 				m.moveSelection(1)
-
 			case "/":
 				m.searchActive = true
 				m.searchInput.Focus()
 				m.searchInput.SetValue("")
 				m.filterModels()
-
 			case "s", "S":
 				m.serverUIStatus = UIStatusStopped
 				m.serverErr = nil
@@ -1209,7 +1408,6 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.toasts != nil {
 					cmds = append(cmds, m.toasts.ShowWarning("Model server stopped"))
 				}
-
 			case "ctrl+s":
 				m.serverUIStatus = UIStatusStopped
 				m.serverErr = nil
@@ -1217,7 +1415,6 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.toasts != nil {
 					cmds = append(cmds, m.toasts.ShowWarning("All servers stopped"))
 				}
-
 			case "e", "E":
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
 					item := m.sidebarItems[m.selected]
@@ -1251,7 +1448,6 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-
 			case "f", "F":
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
 					item := m.sidebarItems[m.selected]
@@ -1268,11 +1464,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-
 			case "y", "Y":
 				m.themePicker = NewThemePickerModel(m.config.Theme)
 				m.themePickerActive = true
-
 			case "b", "B":
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
 					item := m.sidebarItems[m.selected]
@@ -1288,18 +1482,10 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-
 			case "v", "V":
-				history, err := benchmark.LoadHistory(m.config.Paths.Benchmarks)
-				if err == nil {
-					m.perfDashboard = NewPerformanceDashboardModel(history)
-					m.screenMode = ScreenPerformanceDashboard
-				}
-
+				cmds = append(cmds, m.navigateToScreen(ScreenPerformanceDashboard))
 			case "m", "M":
-				m.screenMode = ScreenServerMonitor
-				cmds = append(cmds, m.monitorModel.PollMetricsCmd(), MonitorTickCmd())
-
+				cmds = append(cmds, m.navigateToScreen(ScreenServerMonitor))
 			case "l", "L":
 				var targetPort int
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
@@ -1322,30 +1508,12 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.logStreamerModel = NewLogStreamerModel(m.srvRunner, ScreenBrowser, targetPort)
 				m.screenMode = ScreenLogStreamer
 				cmds = append(cmds, m.logStreamerModel.Init())
-
 			case "u", "U":
-				m.lifecycleModel.RefreshLocalVersion()
-				m.lifecycleModel.RefreshBackupStatus()
-				m.screenMode = ScreenSettings
-
+				cmds = append(cmds, m.navigateToScreen(ScreenSettings))
 			case "d", "D":
-				m.downloaderModel.focus = FocusURL
-				m.downloaderModel.urlInput.Focus()
-				m.screenMode = ScreenDownloader
-
+				cmds = append(cmds, m.navigateToScreen(ScreenDownloader))
 			case "space", "enter":
-				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
-					item := m.sidebarItems[m.selected]
-					if item.Type == ItemModelEntry {
-						selectedModel := m.models[item.ModelIdx]
-						profName := m.config.ModelProfiles[selectedModel.FilePath]
-						if profName == "" {
-							profName = "Balanced"
-						}
-						m.dashboard = NewDashboardModel(selectedModel, m.hardwareSpecs, m.profiles, profName)
-						m.screenMode = ScreenDashboard
-					}
-				}
+				cmds = append(cmds, m.navigateToScreen(ScreenDashboard))
 			}
 		}
 	}
@@ -1675,158 +1843,50 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 	return sb.String()
 }
 
-func (m *BrowserModel) View() string {
-	var baseView string
+func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string {
+	if totalWidth < 60 {
+		totalWidth = 60
+	}
+	leftWidth := int(float64(totalWidth) * 0.40)
+	if leftWidth < 25 {
+		leftWidth = 25
+	}
+	rightWidth := totalWidth - leftWidth - 6
 
-	if m.loading {
-		baseView = "\n  Scanning models directory... Please wait."
-	} else if m.err != nil {
-		baseView = fmt.Sprintf("\n  Error: %v\n  Press Q to quit.", m.err)
-	} else if m.onboardingActive {
-		onboardingOverlay := m.onboardingOverlayView(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, onboardingOverlay)
-	} else if m.llamaCPPMissingActive {
-		missingOverlay := m.llamaCPPMissingOverlayView(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, missingOverlay)
-	} else if m.screenMode == ScreenDashboard && m.dashboard != nil {
-		dashView := m.dashboard.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dashView)
-	} else if m.screenMode == ScreenBenchmarkProgress && m.benchmarkProgress != nil {
-		progressView := m.benchmarkProgress.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, progressView)
-	} else if m.screenMode == ScreenPerformanceDashboard && m.perfDashboard != nil {
-		perfView := m.perfDashboard.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, perfView)
-	} else if m.screenMode == ScreenServerMonitor && m.monitorModel != nil {
-		monitorView := m.monitorModel.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, monitorView)
-	} else if m.screenMode == ScreenSettings && m.lifecycleModel != nil {
-		settingsView := m.lifecycleModel.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, settingsView)
-	} else if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
-		downView := m.downloaderModel.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, downView)
-	} else if m.screenMode == ScreenProfileCreator && m.profileCreatorModel != nil {
-		creatorView := m.profileCreatorModel.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, creatorView)
-	} else if m.screenMode == ScreenLogStreamer && m.logStreamerModel != nil {
-		logView := m.logStreamerModel.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, logView)
+	if panelHeight < 10 {
+		panelHeight = 10
+	}
+
+	var leftSb strings.Builder
+	if len(m.sidebarItems) == 0 {
+		leftSb.WriteString("\n  No models found.")
 	} else {
-		totalWidth := m.width
-		if totalWidth < 60 {
-			totalWidth = 60
+		maxVisible := panelHeight - 2
+		if maxVisible < 1 {
+			maxVisible = 1
 		}
-		leftWidth := int(float64(totalWidth) * 0.40)
-		if leftWidth < 25 {
-			leftWidth = 25
-		}
-		rightWidth := totalWidth - leftWidth - 6
-
-		panelHeight := m.height - 6
-		if panelHeight < 10 {
-			panelHeight = 10
+		if m.selected < m.scrollOffset {
+			m.scrollOffset = m.selected
+		} else if m.selected >= m.scrollOffset+maxVisible {
+			m.scrollOffset = m.selected - maxVisible + 1
 		}
 
-		var leftSb strings.Builder
-		if len(m.sidebarItems) == 0 {
-			leftSb.WriteString("\n  No models found.")
-		} else {
-			maxVisible := panelHeight - 2
-			if maxVisible < 1 {
-				maxVisible = 1
-			}
-			if m.selected < m.scrollOffset {
-				m.scrollOffset = m.selected
-			} else if m.selected >= m.scrollOffset+maxVisible {
-				m.scrollOffset = m.selected - maxVisible + 1
-			}
+		end := m.scrollOffset + maxVisible
+		if end > len(m.sidebarItems) {
+			end = len(m.sidebarItems)
+		}
 
-			end := m.scrollOffset + maxVisible
-			if end > len(m.sidebarItems) {
-				end = len(m.sidebarItems)
+		leftSb.WriteString("\n")
+		for idx := m.scrollOffset; idx < end; idx++ {
+			item := m.sidebarItems[idx]
+
+			if item.Type == ItemSectionHeader {
+				leftSb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf(" %s", item.Label)) + "\n")
+				continue
 			}
 
-			leftSb.WriteString("\n")
-			for idx := m.scrollOffset; idx < end; idx++ {
-				item := m.sidebarItems[idx]
-
-				if item.Type == ItemSectionHeader {
-					leftSb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf(" %s", item.Label)) + "\n")
-					continue
-				}
-
-				if item.Type == ItemFolderHeader {
-					folderLabel := item.Label
-					selWidth := leftWidth - 2
-					if selWidth < 10 {
-						selWidth = 10
-					}
-					if idx == m.selected {
-						leftSb.WriteString(
-							StyleSelectedListItem.Width(selWidth).Render(
-								fmt.Sprintf("  %s", folderLabel),
-							) + "\n",
-						)
-					} else {
-						leftSb.WriteString(
-							fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(folderLabel)),
-						)
-					}
-					continue
-				}
-
-				// Model item entry
-				mod := m.models[item.ModelIdx]
-
-				bullet := "●"
-				var bulletStyled string
-				if m.hardwareSpecs != nil {
-					est := hardware.EstimateMemory(mod, m.hardwareSpecs, 0)
-					switch est.Suitability {
-					case hardware.SuitabilityFitsVRAM:
-						bulletStyled = StyleSuccess.Render(bullet)
-					case hardware.SuitabilityPartialVRAM:
-						bulletStyled = StyleWarning.Render(bullet)
-					case hardware.SuitabilityFitsRAM:
-						bulletStyled = lipgloss.NewStyle().Foreground(ColorSecondary).Render(bullet)
-					case hardware.SuitabilityExceeds:
-						bulletStyled = StyleDanger.Render(bullet)
-					}
-				} else {
-					bulletStyled = StyleListItem.Render(bullet)
-				}
-
-				isRunningStr := ""
-				if m.isModelRunning(mod.FilePath) {
-					isRunningStr = "▶ "
-				}
-
-				rawName := item.Label
-				isFavorite := m.config.IsFavorite(mod.FilePath)
-
-				indent := ""
-				if strings.HasPrefix(rawName, "  ") {
-					indent = "  "
-					rawName = strings.TrimPrefix(rawName, "  ")
-				}
-
-				maxNameLen := leftWidth - 10
-				if isFavorite {
-					maxNameLen -= 2
-				}
-				if maxNameLen < 4 {
-					maxNameLen = 4
-				}
-				rawName = TruncateVisual(rawName, maxNameLen, "...")
-
-				var displayName string
-				if isFavorite {
-					displayName = indent + StyleStar.Render("★ ") + rawName
-				} else {
-					displayName = indent + rawName
-				}
-
+			if item.Type == ItemFolderHeader {
+				folderLabel := item.Label
 				selWidth := leftWidth - 2
 				if selWidth < 10 {
 					selWidth = 10
@@ -1834,85 +1894,339 @@ func (m *BrowserModel) View() string {
 				if idx == m.selected {
 					leftSb.WriteString(
 						StyleSelectedListItem.Width(selWidth).Render(
-							fmt.Sprintf("%s%s %s", isRunningStr, bullet, displayName),
+							fmt.Sprintf("  %s", folderLabel),
 						) + "\n",
 					)
 				} else {
 					leftSb.WriteString(
-						fmt.Sprintf("  %s%s %s\n", isRunningStr, bulletStyled, StyleListItem.Render(displayName)),
+						fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(folderLabel)),
 					)
 				}
+				continue
 			}
-		}
 
-		var leftTitle, rightTitle string
-		leftBorderColor := ColorBorder
-		rightBorderColor := ColorBorder
+			// Model item entry
+			mod := m.models[item.ModelIdx]
 
-		if m.onboardingActive {
-			leftTitle = StyleTitle.Render("Models")
-			rightTitle = StyleTitle.Render("Details")
-		} else {
-			if m.focusRight {
-				rightBorderColor = ColorPrimary
-				leftTitle = StyleTitle.Render("Models")
-				rightTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Details")
+			bullet := "●"
+			var bulletStyled string
+			if m.hardwareSpecs != nil {
+				est := hardware.EstimateMemory(mod, m.hardwareSpecs, 0)
+				switch est.Suitability {
+				case hardware.SuitabilityFitsVRAM:
+					bulletStyled = StyleSuccess.Render(bullet)
+				case hardware.SuitabilityPartialVRAM:
+					bulletStyled = StyleWarning.Render(bullet)
+				case hardware.SuitabilityFitsRAM:
+					bulletStyled = lipgloss.NewStyle().Foreground(ColorSecondary).Render(bullet)
+				case hardware.SuitabilityExceeds:
+					bulletStyled = StyleDanger.Render(bullet)
+				}
 			} else {
-				leftBorderColor = ColorPrimary
-				leftTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Models")
-				rightTitle = StyleTitle.Render("Details")
+				bulletStyled = StyleListItem.Render(bullet)
+			}
+
+			isRunningStr := ""
+			if m.isModelRunning(mod.FilePath) {
+				isRunningStr = "▶ "
+			}
+
+			rawName := item.Label
+			isFavorite := m.config.IsFavorite(mod.FilePath)
+
+			indent := ""
+			if strings.HasPrefix(rawName, "  ") {
+				indent = "  "
+				rawName = strings.TrimPrefix(rawName, "  ")
+			}
+
+			maxNameLen := leftWidth - 10
+			if isFavorite {
+				maxNameLen -= 2
+			}
+			if maxNameLen < 4 {
+				maxNameLen = 4
+			}
+			rawName = TruncateVisual(rawName, maxNameLen, "...")
+
+			var displayName string
+			if isFavorite {
+				displayName = indent + StyleStar.Render("★ ") + rawName
+			} else {
+				displayName = indent + rawName
+			}
+
+			selWidth := leftWidth - 2
+			if selWidth < 10 {
+				selWidth = 10
+			}
+			if idx == m.selected {
+				leftSb.WriteString(
+					StyleSelectedListItem.Width(selWidth).Render(
+						fmt.Sprintf("%s%s %s", isRunningStr, bullet, displayName),
+					) + "\n",
+				)
+			} else {
+				leftSb.WriteString(
+					fmt.Sprintf("  %s%s %s\n", isRunningStr, bulletStyled, StyleListItem.Render(displayName)),
+				)
 			}
 		}
-
-		leftPanelContent := fmt.Sprintf("%s\n%s", leftTitle, leftSb.String())
-
-		leftView := StyleLeftPanel.Copy().
-			BorderForeground(leftBorderColor).
-			Width(leftWidth).
-			Height(panelHeight).
-			Render(leftPanelContent)
-
-		rightPanelContent := fmt.Sprintf("%s\n%s", rightTitle, m.rightPanelView(rightWidth, panelHeight))
-		rightView := StyleRightPanel.Copy().
-			BorderForeground(rightBorderColor).
-			Width(rightWidth).
-			Height(panelHeight).
-			Render(rightPanelContent)
-
-		mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftView, rightView)
-
-		header := lipgloss.NewStyle().MarginBottom(1).Render(
-			RenderGradient("RUNORA — Local AI Control Center", ThemeGradientStart, ThemeGradientEnd),
-		)
-
-		var footer string
-		if m.searchActive {
-			footer = fmt.Sprintf("Search: %s  %s", m.searchInput.View(), StyleHelp.Render("[Esc] Clear/Exit  [Enter] Confirm"))
-		} else {
-			footerItems := []string{
-				fmt.Sprintf("%s Launch", StyleHelpKey.Render("[Enter]")),
-				fmt.Sprintf("%s Favorite", StyleHelpKey.Render("[F]")),
-				fmt.Sprintf("%s Benchmark", StyleHelpKey.Render("[B]")),
-				fmt.Sprintf("%s Dashboard", StyleHelpKey.Render("[V]")),
-				fmt.Sprintf("%s Monitor", StyleHelpKey.Render("[M]")),
-				fmt.Sprintf("%s Logs", StyleHelpKey.Render("[L]")),
-				fmt.Sprintf("%s Settings", StyleHelpKey.Render("[U]")),
-				fmt.Sprintf("%s Downloader", StyleHelpKey.Render("[D]")),
-				fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
-				fmt.Sprintf("%s Search", StyleHelpKey.Render("[/]")),
-				fmt.Sprintf("%s Stop", StyleHelpKey.Render("[S]")),
-				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
-			}
-			footer = strings.Join(footerItems, " │ ")
-		}
-
-		baseView = lipgloss.JoinVertical(lipgloss.Left, header, mainView, StyleHelp.Render(footer))
 	}
 
+	var leftTitle, rightTitle string
+	leftBorderColor := ColorBorder
+	rightBorderColor := ColorBorder
+
+	if m.focusRight {
+		rightBorderColor = ColorPrimary
+		leftTitle = StyleTitle.Render("Models")
+		rightTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Details")
+	} else {
+		leftBorderColor = ColorPrimary
+		leftTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Models")
+		rightTitle = StyleTitle.Render("Details")
+	}
+
+	leftPanelContent := fmt.Sprintf("%s\n%s", leftTitle, leftSb.String())
+
+	leftView := StyleLeftPanel.Copy().
+		BorderForeground(leftBorderColor).
+		Width(leftWidth).
+		Height(panelHeight).
+		Render(leftPanelContent)
+
+	rightPanelContent := fmt.Sprintf("%s\n%s", rightTitle, m.rightPanelView(rightWidth, panelHeight))
+	rightView := StyleRightPanel.Copy().
+		BorderForeground(rightBorderColor).
+		Width(rightWidth).
+		Height(panelHeight).
+		Render(rightPanelContent)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftView, rightView)
+}
+
+func (m *BrowserModel) renderFooter(width int) string {
+	if m.searchActive {
+		return fmt.Sprintf(" %s %s  %s",
+			StyleBadgeStarting.Render(" SEARCH "),
+			m.searchInput.View(),
+			StyleHelp.Render("[Esc] Clear/Exit  │  [Enter] Confirm"),
+		)
+	}
+
+	var breadcrumb string
+	var pills []string
+
+	switch m.screenMode {
+	case ScreenDashboard:
+		breadcrumb = "LAUNCH"
+		pills = []string{
+			fmt.Sprintf("%s Start", StyleHelpKey.Render("[Enter]")),
+			fmt.Sprintf("%s Profile", StyleHelpKey.Render("[←/→]")),
+			fmt.Sprintf("%s New", StyleHelpKey.Render("[P]")),
+			fmt.Sprintf("%s Edit", StyleHelpKey.Render("[E]")),
+			fmt.Sprintf("%s Dupl", StyleHelpKey.Render("[N]")),
+			fmt.Sprintf("%s Delete", StyleHelpKey.Render("[D]")),
+			fmt.Sprintf("%s Copy Cmd", StyleHelpKey.Render("[C]")),
+			fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		}
+	case ScreenBenchmarkProgress:
+		breadcrumb = "BENCHMARK"
+		pills = []string{
+			fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")),
+			fmt.Sprintf("%s Continue", StyleHelpKey.Render("[Enter]")),
+		}
+	case ScreenPerformanceDashboard:
+		breadcrumb = "BENCHMARKS"
+		pills = []string{
+			fmt.Sprintf("%s Navigate", StyleHelpKey.Render("[↑/↓]")),
+			fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		}
+	case ScreenServerMonitor:
+		breadcrumb = "MONITOR"
+		pills = []string{
+			fmt.Sprintf("%s Select Instance", StyleHelpKey.Render("[Tab/1-9]")),
+			fmt.Sprintf("%s Stream Logs", StyleHelpKey.Render("[L]")),
+			fmt.Sprintf("%s Stop", StyleHelpKey.Render("[S]")),
+			fmt.Sprintf("%s Stop All", StyleHelpKey.Render("[Ctrl+S]")),
+			fmt.Sprintf("%s Restart", StyleHelpKey.Render("[R]")),
+			fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		}
+	case ScreenSettings:
+		breadcrumb = "SETTINGS"
+		pills = []string{
+			fmt.Sprintf("%s Select", StyleHelpKey.Render("[↑/↓]")),
+			fmt.Sprintf("%s Update", StyleHelpKey.Render("[Space/U]")),
+			fmt.Sprintf("%s Check", StyleHelpKey.Render("[Enter/C]")),
+			fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")),
+			fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")),
+			fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")),
+			fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")),
+			fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
+			fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		}
+	case ScreenDownloader:
+		breadcrumb = "DOWNLOADS"
+		pills = []string{
+			fmt.Sprintf("%s Download", StyleHelpKey.Render("[Enter]")),
+			fmt.Sprintf("%s Field", StyleHelpKey.Render("[Tab]")),
+			fmt.Sprintf("%s Paste", StyleHelpKey.Render("[Ctrl+V]")),
+			fmt.Sprintf("%s Clear", StyleHelpKey.Render("[C]")),
+			fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		}
+	case ScreenProfileCreator:
+		breadcrumb = "PROFILES"
+		pills = []string{
+			fmt.Sprintf("%s Field", StyleHelpKey.Render("[Tab]")),
+			fmt.Sprintf("%s Save", StyleHelpKey.Render("[Enter]")),
+			fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")),
+		}
+	case ScreenLogStreamer:
+		breadcrumb = "LOGS"
+		pills = []string{
+			fmt.Sprintf("%s Auto-scroll", StyleHelpKey.Render("[F]")),
+			fmt.Sprintf("%s Clear", StyleHelpKey.Render("[C]")),
+			fmt.Sprintf("%s Close", StyleHelpKey.Render("[Esc]")),
+		}
+	case ScreenBrowser:
+		fallthrough
+	default:
+		breadcrumb = "MODELS"
+		pills = []string{
+			fmt.Sprintf("%s Launch", StyleHelpKey.Render("[Enter]")),
+			fmt.Sprintf("%s Favorite", StyleHelpKey.Render("[F]")),
+			fmt.Sprintf("%s Bench", StyleHelpKey.Render("[B]")),
+			fmt.Sprintf("%s Task", StyleHelpKey.Render("[E]")),
+			fmt.Sprintf("%s Logs", StyleHelpKey.Render("[L]")),
+			fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
+			fmt.Sprintf("%s Search", StyleHelpKey.Render("[/]")),
+			fmt.Sprintf("%s Stop", StyleHelpKey.Render("[S]")),
+			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		}
+	}
+
+	badge := lipgloss.NewStyle().
+		Background(ColorPrimary).
+		Foreground(ColorTextOnAccent).
+		Bold(true).
+		Padding(0, 1).
+		Render(breadcrumb)
+
+	pillsStr := strings.Join(pills, " │ ")
+	navHint := StyleMuted.Render("[1-6 / Tab] Navigate Screens")
+
+	footerContent := fmt.Sprintf(" %s  %s  │  %s", badge, pillsStr, navHint)
+	return StyleHelp.Render(footerContent)
+}
+
+func (m *BrowserModel) View() string {
+	if m.loading {
+		return "\n  Scanning models directory... Please wait."
+	}
+	if m.err != nil {
+		return fmt.Sprintf("\n  Error: %v\n  Press Q to quit.", m.err)
+	}
+	if m.onboardingActive {
+		onboardingOverlay := m.onboardingOverlayView(m.width, m.height)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, onboardingOverlay)
+	}
+	if m.llamaCPPMissingActive {
+		missingOverlay := m.llamaCPPMissingOverlayView(m.width, m.height)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, missingOverlay)
+	}
 	if m.themePickerActive && m.themePicker != nil {
 		pickerView := m.themePicker.View(m.width, m.height)
-		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, pickerView)
+		baseView := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, pickerView)
+		if m.toasts != nil && m.toasts.Active() {
+			return m.toasts.Overlay(baseView, m.width, m.height)
+		}
+		return baseView
 	}
+
+	totalWidth := m.width
+	if totalWidth < 60 {
+		totalWidth = 80
+	}
+	totalHeight := m.height
+	if totalHeight < 15 {
+		totalHeight = 24
+	}
+
+	runningCount := m.getRunningCount()
+	vramGauge := m.getVRAMGauge()
+	header := GlobalTabHeader(m.screenMode, totalWidth, runningCount, vramGauge)
+
+	headerHeight := lipgloss.Height(header)
+	footerHeight := 1
+	bodyHeight := totalHeight - headerHeight - footerHeight - 1
+	if bodyHeight < 8 {
+		bodyHeight = 8
+	}
+
+	var bodyView string
+	switch m.screenMode {
+	case ScreenDashboard:
+		if m.dashboard != nil {
+			bodyView = m.dashboard.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  No model selected. Press [1] to browse models."
+		}
+	case ScreenBenchmarkProgress:
+		if m.benchmarkProgress != nil {
+			bodyView = m.benchmarkProgress.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  No benchmark running. Press [1] to select a model and [B] to bench."
+		}
+	case ScreenPerformanceDashboard:
+		if m.perfDashboard != nil {
+			bodyView = m.perfDashboard.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  No benchmark records found. Run a benchmark with [B] in the browser."
+		}
+	case ScreenServerMonitor:
+		if m.monitorModel != nil {
+			bodyView = m.monitorModel.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  Server monitor unavailable."
+		}
+	case ScreenSettings:
+		if m.lifecycleModel != nil {
+			bodyView = m.lifecycleModel.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  Settings unavailable."
+		}
+	case ScreenDownloader:
+		if m.downloaderModel != nil {
+			bodyView = m.downloaderModel.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  Downloader unavailable."
+		}
+	case ScreenProfileCreator:
+		if m.profileCreatorModel != nil {
+			bodyView = m.profileCreatorModel.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  Profile creator unavailable."
+		}
+	case ScreenLogStreamer:
+		if m.logStreamerModel != nil {
+			bodyView = m.logStreamerModel.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  Log streamer unavailable."
+		}
+	case ScreenBrowser:
+		fallthrough
+	default:
+		bodyView = m.modelBrowserView(totalWidth, bodyHeight)
+	}
+
+	footer := m.renderFooter(totalWidth)
+	baseView := lipgloss.JoinVertical(lipgloss.Left, header, bodyView, footer)
 
 	if m.toasts != nil && m.toasts.Active() {
 		return m.toasts.Overlay(baseView, m.width, m.height)
