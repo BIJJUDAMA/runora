@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -198,8 +199,9 @@ func (q *DownloadQueue) CancelTask(task *DownloadTask) {
 		}
 	}
 
-	// Remove file if partially downloaded
+	// Remove file and part file if partially downloaded
 	_ = os.Remove(task.DestPath)
+	_ = os.Remove(task.DestPath + ".part")
 
 	q.notify(task)
 	q.processNext()
@@ -312,9 +314,11 @@ func (q *DownloadQueue) downloadLoop(ctx context.Context, task *DownloadTask) er
 		return err
 	}
 
-	// Get local size
+	partPath := task.DestPath + ".part"
+
+	// Get local size from part file if resuming
 	var startBytes int64 = 0
-	info, err := os.Stat(task.DestPath)
+	info, err := os.Stat(partPath)
 	if err == nil {
 		startBytes = info.Size()
 	}
@@ -324,10 +328,27 @@ func (q *DownloadQueue) downloadLoop(ctx context.Context, task *DownloadTask) er
 		task.mu.Lock()
 		task.Downloaded = task.TotalSize
 		task.mu.Unlock()
+		_ = ReplaceFile(partPath, task.DestPath)
 		return nil
 	}
 
-	client := &http.Client{}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   0,
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", task.URL, nil)
 	if err != nil {
 		return err
@@ -354,15 +375,19 @@ func (q *DownloadQueue) downloadLoop(ctx context.Context, task *DownloadTask) er
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("server returned HTTP error %d: %s", resp.StatusCode, resp.Status)
+	}
+
 	var file *os.File
 	if isResuming && resp.StatusCode == http.StatusPartialContent {
-		file, err = os.OpenFile(task.DestPath, os.O_WRONLY|os.O_APPEND, 0644)
+		file, err = os.OpenFile(partPath, os.O_WRONLY|os.O_APPEND, 0644)
 		task.mu.Lock()
 		task.Downloaded = startBytes
 		task.mu.Unlock()
 	} else {
-		// Truncate/create new
-		file, err = os.OpenFile(task.DestPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		// Truncate/create new part file
+		file, err = os.OpenFile(partPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		task.mu.Lock()
 		task.Downloaded = 0
 		task.mu.Unlock()
@@ -440,7 +465,9 @@ func (q *DownloadQueue) downloadLoop(ctx context.Context, task *DownloadTask) er
 		q.notify(task)
 	}
 
-	return nil
+	// Close file explicitly before atomic rename to destination
+	_ = file.Close()
+	return ReplaceFile(partPath, task.DestPath)
 }
 
 // SearchHFModels queries Hugging Face API for repositories matching query.

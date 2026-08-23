@@ -72,10 +72,27 @@ func TestDownloadQueueFlow(t *testing.T) {
 		t.Errorf("expected task status to be StatusQueued or StatusDownloading, got %d", resumedStatus)
 	}
 
-	// Test Cancel Task
+	// Test Cancel Task cleans up both DestPath and .part file
+	if err := os.MkdirAll(filepath.Dir(task.DestPath), 0755); err != nil {
+		t.Fatalf("failed to create dest dir: %v", err)
+	}
+	partPath := task.DestPath + ".part"
+	if err := os.WriteFile(partPath, []byte("partial download data"), 0644); err != nil {
+		t.Fatalf("failed to write dummy part file: %v", err)
+	}
+	if err := os.WriteFile(task.DestPath, []byte("dest file data"), 0644); err != nil {
+		t.Fatalf("failed to write dummy dest file: %v", err)
+	}
+
 	q.CancelTask(task)
 	if len(q.GetTasks()) != 0 {
 		t.Errorf("expected task to be removed from queue after Cancel")
+	}
+	if _, err := os.Stat(partPath); !os.IsNotExist(err) {
+		t.Errorf("expected .part file to be removed after CancelTask")
+	}
+	if _, err := os.Stat(task.DestPath); !os.IsNotExist(err) {
+		t.Errorf("expected DestPath to be removed after CancelTask")
 	}
 }
 
