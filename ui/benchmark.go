@@ -295,18 +295,20 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 	hwContent := hwSB.String()
 
 	// Assemble SurfaceCards with distributed height
-	cardHeight := 0
+	h1, h2, h3 := 0, 0, 0
 	if height > 0 {
 		availHeight := height - 1 // Footer takes 1 line
-		if availHeight > 0 {
-			cardHeight = availHeight / 3
+		if availHeight > 20 {
+			h3 = 5
+			h2 = 9
+			h1 = availHeight - h3 - h2
 		}
 	}
 
 	historyBadge := fmt.Sprintf("%d runs", len(d.History))
-	card1 := SurfaceCardWithHeight("Benchmark Run History", historyContent, cardWidth, cardHeight, true, historyBadge)
-	card2 := SurfaceCardWithHeight("Throughput & Latency (Tokens/sec)", chartContent, cardWidth, cardHeight, false, "TTFT + Decode")
-	card3 := SurfaceCardWithHeight("Test Platform", hwContent, cardWidth, cardHeight, false, "Specs")
+	card1 := SurfaceCardWithHeight("Benchmark Run History", historyContent, cardWidth, h1, true, historyBadge)
+	card2 := SurfaceCardWithHeight("Throughput & Latency (Tokens/sec)", chartContent, cardWidth, h2, false, "TTFT + Decode")
+	card3 := SurfaceCardWithHeight("Test Platform", hwContent, cardWidth, h3, false, "Specs")
 
 	helpFooter := fmt.Sprintf("  %s Back to Browser  %s Select Run  %s Run Benchmark",
 		StyleHelpKey.Render("[Esc]"),

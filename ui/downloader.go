@@ -638,14 +638,17 @@ func (m *DownloaderModel) View(width int, height int) string {
 	topHeight := 0
 	midHeight := 0
 	botHeight := 0
-
 	helpHeight := 1
 	if height > 0 {
 		availHeight := height - helpHeight
-		if availHeight > 0 {
-			topHeight = availHeight / 3
-			midHeight = (availHeight - topHeight) / 2
+		if availHeight > 18 {
+			topHeight = 8
+			midHeight = 7
 			botHeight = availHeight - topHeight - midHeight
+		} else {
+			topHeight = 0
+			midHeight = 0
+			botHeight = 0
 		}
 	}
 

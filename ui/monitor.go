@@ -295,83 +295,66 @@ func (m *MonitorModel) View(width int, height int) string {
 		endHex = "#04B575"
 	}
 
-	// Calculate height distribution among cards
-	var hSummary, hInstance, hContext, hControl int
-	if height >= 16 {
-		hSummary = (height * 7) / 30
-		hInstance = (height * 9) / 30
-		hContext = (height * 8) / 30
-		hControl = height - hSummary - hInstance - hContext
-	}
-
 	// 1. Top Summary Bento Card
 	var summaryContent string
 	var summaryBadge string
 
 	if len(m.instances) == 0 {
-		summaryBadge = "0 running"
 		var sumSb strings.Builder
-		sumSb.WriteString("  No active server instances are currently running.\n")
-		sumSb.WriteString("  Start or launch a model from the Models screen [1] or Launch Dashboard [2].")
-		summaryContent = sumSb.String()
-	} else {
-		summaryBadge = fmt.Sprintf("%d running", len(m.instances))
-		var sumSb strings.Builder
-
-		// Multi-instance summary table header
-		headerRow := fmt.Sprintf("  %-6s %-22s %-8s %-12s %-18s %-8s", "PORT", "MODEL", "PID", "UPTIME", "GENERATION SPEED", "STATUS")
-		sumSb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorTextMuted).Render(headerRow) + "\n")
-		divW := innerWidth
-		if divW > 80 {
-			divW = 80
-		}
-		sumSb.WriteString("  " + strings.Repeat("─", divW) + "\n")
-
-		for idx, inst := range m.instances {
-			modelName := filepath.Base(inst.ModelPath)
-			modelName = TruncateVisual(modelName, 22, "...")
-
-			uptimeSec := int(inst.Uptime.Seconds())
-			uptimeStr := fmt.Sprintf("%dh %dm %ds", uptimeSec/3600, (uptimeSec%3600)/60, uptimeSec%60)
-
-			statusStr := lipgloss.NewStyle().Foreground(ColorSecondary).Render("Serving")
-
-			speedStr, hasSpeed := m.cachedSpeed[inst.Port]
-			if !hasSpeed {
-				speedStr = "0.0 tokens/sec"
-			}
-
-			row := fmt.Sprintf("  %-6d %-22s %-8d %-12s %-18s %-8s",
-				inst.Port, modelName, inst.PID, uptimeStr, speedStr, statusStr,
-			)
-
-			if idx == m.selected {
-				sumSb.WriteString(StyleSelectedListItem.Width(innerWidth).Render(row) + "\n")
-			} else {
-				sumSb.WriteString(row + "\n")
-			}
-		}
+		sumSb.WriteString("\n")
+		sumSb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Bold(true).Render("NO ACTIVE SERVER INSTANCES") + "\n\n")
+		sumSb.WriteString("  llama-server and ONNX inference runtimes are currently idle.\n\n")
+		sumSb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("Quick Start:") + "\n")
+		sumSb.WriteString(fmt.Sprintf("  • Press %s to browse your local GGUF model library\n", StyleHelpKey.Render("[1] Models")))
+		sumSb.WriteString(fmt.Sprintf("  • Press %s to configure execution profile and launch an inference server\n", StyleHelpKey.Render("[2] Launch")))
+		sumSb.WriteString(fmt.Sprintf("  • Press %s to download popular open-weights models\n", StyleHelpKey.Render("[4] Downloads")))
 		summaryContent = strings.TrimRight(sumSb.String(), "\n")
-	}
 
-	// If no instances running, render Top Summary Card + Control Actions Card
-	if len(m.instances) == 0 {
-		var hEmptySum, hEmptyCtrl int
-		if height >= 8 {
-			hEmptySum = height / 2
-			hEmptyCtrl = height - hEmptySum
+		cardHeight := 14
+		if height > 16 {
+			cardHeight = height - 2
 		}
-		summaryCard := SurfaceCardWithHeight("Active Server Instances", summaryContent, cardWidth, hEmptySum, false, summaryBadge)
-		controlShortcuts := fmt.Sprintf("  %s Back to Browser  %s Models  %s Launch",
-			StyleHelpKey.Render("[Esc]"),
-			StyleHelpKey.Render("[1]"),
-			StyleHelpKey.Render("[2]"),
-		)
-		controlCard := SurfaceCardWithHeight("Control Actions", controlShortcuts, cardWidth, hEmptyCtrl, false, "")
-		return summaryCard + "\n" + controlCard
+		return SurfaceCardWithHeight("Active Server Instances", summaryContent, cardWidth, cardHeight, false, "0 running")
 	}
 
-	summaryCard := SurfaceCardWithHeight("Active Server Instances", summaryContent, cardWidth, hSummary, false, summaryBadge)
+	summaryBadge = fmt.Sprintf("%d running", len(m.instances))
+	var sumSb strings.Builder
+
+	// Multi-instance summary table header
+	headerRow := fmt.Sprintf("  %-6s %-22s %-8s %-12s %-18s %-8s", "PORT", "MODEL", "PID", "UPTIME", "GENERATION SPEED", "STATUS")
+	sumSb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorTextMuted).Render(headerRow) + "\n")
+	divW := innerWidth
+	if divW > 80 {
+		divW = 80
+	}
+	sumSb.WriteString("  " + strings.Repeat("─", divW) + "\n")
+
+	for idx, inst := range m.instances {
+		modelName := filepath.Base(inst.ModelPath)
+		modelName = TruncateVisual(modelName, 22, "...")
+
+		uptimeSec := int(inst.Uptime.Seconds())
+		uptimeStr := fmt.Sprintf("%dh %dm %ds", uptimeSec/3600, (uptimeSec%3600)/60, uptimeSec%60)
+
+		statusStr := lipgloss.NewStyle().Foreground(ColorSecondary).Render("Serving")
+
+		speedStr, hasSpeed := m.cachedSpeed[inst.Port]
+		if !hasSpeed {
+			speedStr = "0.0 tokens/sec"
+		}
+
+		row := fmt.Sprintf("  %-6d %-22s %-8d %-12s %-18s %-8s",
+			inst.Port, modelName, inst.PID, uptimeStr, speedStr, statusStr,
+		)
+
+		if idx == m.selected {
+			sumSb.WriteString(StyleSelectedListItem.Width(innerWidth).Render(row) + "\n")
+		} else {
+			sumSb.WriteString(row + "\n")
+		}
+	}
+	summaryContent = strings.TrimRight(sumSb.String(), "\n")
+	summaryCard := SurfaceCard("Active Server Instances", summaryContent, cardWidth, false, summaryBadge)
 
 	// Active selected instance resolution
 	selectedIdx := m.selected
@@ -443,7 +426,7 @@ func (m *MonitorModel) View(width int, height int) string {
 	}
 
 	instanceBadge := fmt.Sprintf("Port %d [Active]", selectedInst.Port)
-	instanceCard := SurfaceCardWithHeight("Live Instance Details", instSb.String(), cardWidth, hInstance, true, instanceBadge)
+	instanceCard := SurfaceCard("Live Instance Details", instSb.String(), cardWidth, true, instanceBadge)
 
 	// 3. Live Context Slot Utilization Bento Card
 	gaugeWidth := 20
@@ -484,7 +467,7 @@ func (m *MonitorModel) View(width int, height int) string {
 		slotSb.WriteString(fmt.Sprintf("  %-18s %s", "Status:", "Waiting for active inference requests / metrics query..."))
 	}
 
-	contextCard := SurfaceCardWithHeight("Live Context Slot Utilization", slotSb.String(), cardWidth, hContext, false, contextBadge)
+	contextCard := SurfaceCard("Live Context Slot Utilization", slotSb.String(), cardWidth, false, contextBadge)
 
 	// 4. Control Actions Card
 	helpShortcuts := fmt.Sprintf("  %s Restart  %s Stop  %s Stop All  %s Stream Logs  %s Back",
@@ -498,7 +481,7 @@ func (m *MonitorModel) View(width int, height int) string {
 		StyleHelpKey.Render("[Up/Down/j/k]"),
 		StyleHelpKey.Render("[Tick]"),
 	)
-	controlCard := SurfaceCardWithHeight("Control Actions", helpShortcuts+"\n"+navShortcuts, cardWidth, hControl, false, "")
+	controlCard := SurfaceCard("Control Actions", helpShortcuts+"\n"+navShortcuts, cardWidth, false, "")
 
 	return summaryCard + "\n" + instanceCard + "\n" + contextCard + "\n" + controlCard
 }

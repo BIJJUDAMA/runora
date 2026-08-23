@@ -833,44 +833,6 @@ func SurfaceCardWithHeight(title string, content string, width int, height int, 
 	if height > 2 {
 		innerHeight := height - 2
 		cardStyle = cardStyle.Height(innerHeight)
-
-		contentLines := 0
-		if content != "" {
-			if innerWidth > 0 {
-				contentLines = lipgloss.Height(lipgloss.NewStyle().Width(innerWidth).Render(content))
-			} else {
-				contentLines = len(strings.Split(content, "\n"))
-			}
-		}
-		headerLines := 0
-		if headerLine != "" {
-			if innerWidth > 0 {
-				headerLines = lipgloss.Height(lipgloss.NewStyle().Width(innerWidth).Render(headerLine))
-			} else {
-				headerLines = 1
-			}
-		}
-
-		usedLines := headerLines + contentLines
-		remainingLines := innerHeight - usedLines
-		if remainingLines > 0 {
-			topPad := remainingLines / 2
-			bottomPad := remainingLines - topPad
-			var sb strings.Builder
-			if headerLine != "" {
-				sb.WriteString(headerLine + "\n")
-			}
-			if topPad > 0 {
-				sb.WriteString(strings.Repeat("\n", topPad))
-			}
-			if content != "" {
-				sb.WriteString(content)
-			}
-			if bottomPad > 0 {
-				sb.WriteString(strings.Repeat("\n", bottomPad))
-			}
-			return cardStyle.Render(sb.String())
-		}
 	}
 
 	var cardBody string
