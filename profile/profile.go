@@ -195,3 +195,76 @@ func LoadAll(profilesDir string) ([]*Profile, error) {
 
 	return profiles, nil
 }
+
+// IsDefaultProfile returns true if the profile name matches one of the built-in default profiles.
+func IsDefaultProfile(name string) bool {
+	clean := strings.ToLower(strings.TrimSpace(name))
+	defaults := []string{"fast", "balanced", "high", "long context", "cpu"}
+	for _, d := range defaults {
+		if clean == d {
+			return true
+		}
+	}
+	return false
+}
+
+// SaveProfile writes a profile to JSON format in the specified profiles directory.
+func SaveProfile(profilesDir string, p *Profile) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(profilesDir, 0755); err != nil {
+		return err
+	}
+	cleanName := SanitizeProfileName(p.Name)
+	fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
+	filePath := filepath.Join(profilesDir, fileName)
+
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	return config.AtomicWriteFile(filePath, data, 0644)
+}
+
+// DeleteProfile deletes a custom profile file from the specified profiles directory.
+// Default built-in profiles cannot be deleted.
+func DeleteProfile(profilesDir string, name string) error {
+	if IsDefaultProfile(name) {
+		return fmt.Errorf("cannot delete built-in default profile %q", name)
+	}
+
+	cleanName := SanitizeProfileName(name)
+	fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
+	targetPath := filepath.Join(profilesDir, fileName)
+
+	// Remove by filename if exists
+	if _, err := os.Stat(targetPath); err == nil {
+		_ = os.Remove(targetPath)
+		return nil
+	}
+
+	// Also search for any JSON file whose internal profile Name matches
+	files, err := os.ReadDir(profilesDir)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
+			filePath := filepath.Join(profilesDir, f.Name())
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				continue
+			}
+			var p Profile
+			if err := json.Unmarshal(data, &p); err == nil {
+				if strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(name)) {
+					_ = os.Remove(filePath)
+					return nil
+				}
+			}
+		}
+	}
+	return nil
+}
+

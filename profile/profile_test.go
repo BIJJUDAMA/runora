@@ -187,3 +187,74 @@ func TestSanitizeProfileName(t *testing.T) {
 		t.Errorf("expected 'test_profile_name_', got %q", sanitizedChars)
 	}
 }
+
+func TestIsDefaultProfile(t *testing.T) {
+	for _, name := range []string{"Fast", "fast", "BALANCED", "High", "Long Context", "cpu", "CPU"} {
+		if !IsDefaultProfile(name) {
+			t.Errorf("expected %q to be identified as default profile", name)
+		}
+	}
+	for _, name := range []string{"Custom-8K", "My Profile", "Fast-Copy", "Gaming"} {
+		if IsDefaultProfile(name) {
+			t.Errorf("expected %q to NOT be identified as default profile", name)
+		}
+	}
+}
+
+func TestProfileSaveAndDelete(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama-profile-save-del-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	p := &Profile{
+		Name:      "My Custom Config",
+		Context:   4096,
+		Threads:   6,
+		GPULayers: 35,
+		BatchSize: 512,
+		Host:      "127.0.0.1",
+		Port:      50505,
+	}
+
+	if err := SaveProfile(tempDir, p); err != nil {
+		t.Fatalf("failed to save profile: %v", err)
+	}
+
+	profs, err := LoadAll(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load profiles: %v", err)
+	}
+
+	found := false
+	for _, loaded := range profs {
+		if loaded.Name == "My Custom Config" {
+			found = true
+			if loaded.Threads != 6 || loaded.GPULayers != 35 {
+				t.Errorf("profile data mismatch: %+v", loaded)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("saved profile not found in loaded profiles")
+	}
+
+	// Deleting default profile must fail
+	if err := DeleteProfile(tempDir, "Fast"); err == nil {
+		t.Errorf("expected deleting default profile 'Fast' to return error, got nil")
+	}
+
+	// Deleting custom profile should succeed
+	if err := DeleteProfile(tempDir, "My Custom Config"); err != nil {
+		t.Fatalf("failed to delete custom profile: %v", err)
+	}
+
+	profsAfter, _ := LoadAll(tempDir)
+	for _, loaded := range profsAfter {
+		if loaded.Name == "My Custom Config" {
+			t.Errorf("expected custom profile to be deleted from disk, but it was found")
+		}
+	}
+}
+
