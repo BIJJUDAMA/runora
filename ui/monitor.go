@@ -277,117 +277,179 @@ func (m *MonitorModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (m *MonitorModel) View(width int, height int) string {
-	var sb strings.Builder
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("RUNTIME SERVER MONITOR")))
+	cardWidth := width
+	if cardWidth < 50 {
+		cardWidth = 50
+	}
+	innerWidth := cardWidth - 6
+	if innerWidth < 20 {
+		innerWidth = 20
+	}
+
+	startHex := ThemeGradientStart
+	if startHex == "" {
+		startHex = "#7D56F4"
+	}
+	endHex := ThemeGradientEnd
+	if endHex == "" {
+		endHex = "#04B575"
+	}
+
+	// 1. Top Summary Bento Card
+	var summaryContent string
+	var summaryBadge string
 
 	if len(m.instances) == 0 {
-		sb.WriteString("  No active server instances are currently running.\n\n")
-		sb.WriteString("  " + StyleHelpKey.Render("[Esc]") + " Back to Browser\n")
+		summaryBadge = "0 running"
+		var sumSb strings.Builder
+		sumSb.WriteString("  No active server instances are currently running.\n")
+		sumSb.WriteString("  Start or launch a model from the Models screen [1] or Launch Dashboard [2].")
+		summaryContent = sumSb.String()
 	} else {
-		sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Active Server Instances:") + "\n")
-		sb.WriteString(fmt.Sprintf("  %-6s %-20s %-10s %-10s %-6s\n", "Port", "Model", "PID", "Uptime", "Status"))
-		divWidth := width - 8
-		if divWidth < 10 {
-			divWidth = 10
+		summaryBadge = fmt.Sprintf("%d running", len(m.instances))
+		var sumSb strings.Builder
+
+		// Multi-instance summary table header
+		headerRow := fmt.Sprintf("  %-6s %-22s %-8s %-12s %-18s %-8s", "PORT", "MODEL", "PID", "UPTIME", "GENERATION SPEED", "STATUS")
+		sumSb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorTextMuted).Render(headerRow) + "\n")
+		divW := innerWidth
+		if divW > 80 {
+			divW = 80
 		}
-		sb.WriteString("  " + strings.Repeat("─", divWidth) + "\n")
+		sumSb.WriteString("  " + strings.Repeat("─", divW) + "\n")
 
 		for idx, inst := range m.instances {
 			modelName := filepath.Base(inst.ModelPath)
-			modelName = TruncateVisual(modelName, 20, "...")
+			modelName = TruncateVisual(modelName, 22, "...")
 
 			uptimeSec := int(inst.Uptime.Seconds())
 			uptimeStr := fmt.Sprintf("%dh %dm %ds", uptimeSec/3600, (uptimeSec%3600)/60, uptimeSec%60)
 
 			statusStr := lipgloss.NewStyle().Foreground(ColorSecondary).Render("Serving")
 
-			row := fmt.Sprintf("  %-6d %-20s %-10d %-10s %-6s",
-				inst.Port, modelName, inst.PID, uptimeStr, statusStr,
+			speedStr, hasSpeed := m.cachedSpeed[inst.Port]
+			if !hasSpeed {
+				speedStr = "0.0 tokens/sec"
+			}
+
+			row := fmt.Sprintf("  %-6d %-22s %-8d %-12s %-18s %-8s",
+				inst.Port, modelName, inst.PID, uptimeStr, speedStr, statusStr,
 			)
 
 			if idx == m.selected {
-				rowWidth := width - 8
-				if rowWidth < 10 {
-					rowWidth = 10
-				}
-				sb.WriteString(StyleSelectedListItem.Width(rowWidth).Render(row) + "\n")
+				sumSb.WriteString(StyleSelectedListItem.Width(innerWidth).Render(row) + "\n")
 			} else {
-				sb.WriteString(row + "\n")
+				sumSb.WriteString(row + "\n")
 			}
 		}
+		summaryContent = strings.TrimRight(sumSb.String(), "\n")
+	}
 
-		sb.WriteString("\n")
+	summaryCard := SurfaceCard("Active Server Instances", summaryContent, cardWidth, false, summaryBadge)
 
-		selectedIdx := m.selected
-		if selectedIdx >= len(m.instances) {
-			selectedIdx = len(m.instances) - 1
-		}
-		if selectedIdx < 0 {
-			selectedIdx = 0
-		}
-		selectedInst := m.instances[selectedIdx]
-
-		sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Selected Instance Performance Metrics:") + "\n")
-		sb.WriteString("  " + strings.Repeat("─", divWidth) + "\n")
-
-		memStr, hasMem := m.cachedMem[selectedInst.PID]
-		if !hasMem {
-			memStr = "Gathering..."
-		}
-		reqStr, hasReq := m.cachedReqs[selectedInst.Port]
-		if !hasReq {
-			reqStr = "Gathering..."
-		}
-
-		// Slot / context window utilization gauge: [████████░░░░] 65% (5324 / 8192)
-		var contextGaugeStr string
-		if slotMetrics, ok := m.cachedSlots[selectedInst.Port]; ok && slotMetrics != nil && slotMetrics.TotalNCtx > 0 {
-			barColor := ColorSecondary
-			if slotMetrics.PctUsed > 85 {
-				barColor = ColorGold
-			}
-			if slotMetrics.PctUsed > 95 {
-				barColor = ColorDanger
-			}
-			bar := RenderProgressBar(slotMetrics.PctUsed, 12, barColor)
-			contextGaugeStr = fmt.Sprintf("[%s] %.0f%% (%d / %d)", bar, slotMetrics.PctUsed, slotMetrics.TotalNPast, slotMetrics.TotalNCtx)
-		} else {
-			contextGaugeStr = fmt.Sprintf("[%s] 0%% (Idle / No slot data)", RenderProgressBar(0, 12, ColorProgressEmpty))
-		}
-
-		// Token generation speed (tokens/sec)
-		speedStr, hasSpeed := m.cachedSpeed[selectedInst.Port]
-		if !hasSpeed {
-			speedStr = "0.0 tokens/sec (Idle)"
-		}
-
-		sb.WriteString(fmt.Sprintf("  %-20s %d\n", "Process PID:", selectedInst.PID))
-		sb.WriteString(fmt.Sprintf("  %-20s %d\n", "Server Port:", selectedInst.Port))
-		sb.WriteString(fmt.Sprintf("  %-20s http://127.0.0.1:%d\n", "Endpoint:", selectedInst.Port))
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n", "Active Memory (RSS):", memStr))
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n", "Requests Handled:", reqStr))
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n", "Context Window:", contextGaugeStr))
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n", "Generation Speed:", speedStr))
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n\n", "Log File Path:", selectedInst.LogFile))
-
-		helpStr := fmt.Sprintf("%s Stop  %s Restart  %s Stream Logs  %s Terminate All  %s Back",
-			StyleHelpKey.Render("[S]"),
-			StyleHelpKey.Render("[R]"),
-			StyleHelpKey.Render("[L]"),
-			StyleHelpKey.Render("[Ctrl+K]"),
+	// If no instances running, render Top Summary Card + Control Actions Card
+	if len(m.instances) == 0 {
+		controlShortcuts := fmt.Sprintf("  %s Back to Browser  %s Models  %s Launch",
 			StyleHelpKey.Render("[Esc]"),
+			StyleHelpKey.Render("[1]"),
+			StyleHelpKey.Render("[2]"),
 		)
-		sb.WriteString("  " + helpStr + "\n")
+		controlCard := SurfaceCard("Control Actions", controlShortcuts, cardWidth, false, "")
+		return summaryCard + "\n" + controlCard
 	}
 
-	boxWidth := width - 4
-	if boxWidth < 50 {
-		boxWidth = 50
+	// Active selected instance resolution
+	selectedIdx := m.selected
+	if selectedIdx >= len(m.instances) {
+		selectedIdx = len(m.instances) - 1
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Width(boxWidth).
-		Render(sb.String())
+	if selectedIdx < 0 {
+		selectedIdx = 0
+	}
+	selectedInst := m.instances[selectedIdx]
+
+	modelBase := filepath.Base(selectedInst.ModelPath)
+	modelBaseTrunc := TruncateVisual(modelBase, max(24, innerWidth-25), "...")
+
+	uptimeSec := int(selectedInst.Uptime.Seconds())
+	uptimeStr := fmt.Sprintf("%dh %dm %ds", uptimeSec/3600, (uptimeSec%3600)/60, uptimeSec%60)
+
+	memStr, hasMem := m.cachedMem[selectedInst.PID]
+	if !hasMem {
+		memStr = "Gathering..."
+	}
+	reqStr, hasReq := m.cachedReqs[selectedInst.Port]
+	if !hasReq {
+		reqStr = "Gathering..."
+	}
+	speedStr, hasSpeed := m.cachedSpeed[selectedInst.Port]
+	if !hasSpeed {
+		speedStr = "0.0 tokens/sec (Idle)"
+	}
+
+	// 2. Live Instance List / Selected Instance Bento Card
+	var instSb strings.Builder
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Model Name:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelBaseTrunc)))
+	instSb.WriteString(fmt.Sprintf("  %-20s %d\n", "Server Port:", selectedInst.Port))
+	instSb.WriteString(fmt.Sprintf("  %-20s %d\n", "Process PID:", selectedInst.PID))
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Host / Endpoint:", fmt.Sprintf("http://127.0.0.1:%d", selectedInst.Port)))
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Uptime:", uptimeStr))
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Generation Speed:", speedStr))
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "HTTP Status:", lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("HTTP 200 OK (Serving)")))
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Active Memory (RSS):", memStr))
+	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Requests Handled:", reqStr))
+	if selectedInst.LogFile != "" {
+		instSb.WriteString(fmt.Sprintf("  %-20s %s", "Log File Path:", TruncateVisual(selectedInst.LogFile, max(30, innerWidth-25), "...")))
+	}
+
+	instanceBadge := fmt.Sprintf("Port %d [Active]", selectedInst.Port)
+	instanceCard := SurfaceCard("Live Instance Details", instSb.String(), cardWidth, true, instanceBadge)
+
+	// 3. Live Context Slot Utilization Bento Card
+	gaugeWidth := 20
+	if innerWidth > 60 {
+		gaugeWidth = 24
+	}
+
+	var contextGaugeStr string
+	var contextBadge string
+	var slotSb strings.Builder
+
+	slotMetrics, hasSlots := m.cachedSlots[selectedInst.Port]
+	if hasSlots && slotMetrics != nil && slotMetrics.TotalNCtx > 0 {
+		slotPct := slotMetrics.PctUsed
+		bar := RenderGradientBar(slotPct, gaugeWidth, startHex, endHex)
+		contextGaugeStr = fmt.Sprintf("[%s] %.0f%% (%d / %d tokens)", bar, slotPct, slotMetrics.TotalNPast, slotMetrics.TotalNCtx)
+		contextBadge = fmt.Sprintf("%.0f%% Used", slotPct)
+
+		slotSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Context Window:", contextGaugeStr))
+		slotSb.WriteString(fmt.Sprintf("  %-20s %d / %d slots active\n", "Slot Allocations:", slotMetrics.ActiveSlots, slotMetrics.TotalSlots))
+		slotSb.WriteString(fmt.Sprintf("  %-20s %d tokens\n", "Processed (n_past):", slotMetrics.TotalNPast))
+		slotSb.WriteString(fmt.Sprintf("  %-20s %d tokens", "Capacity (n_ctx):", slotMetrics.TotalNCtx))
+	} else {
+		bar := RenderGradientBar(0, gaugeWidth, startHex, endHex)
+		contextGaugeStr = fmt.Sprintf("[%s] 0%% (Idle / No slot data)", bar)
+		contextBadge = "Idle"
+
+		slotSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Context Window:", contextGaugeStr))
+		slotSb.WriteString(fmt.Sprintf("  %-20s %s", "Status:", "Waiting for active inference requests / metrics query..."))
+	}
+
+	contextCard := SurfaceCard("Live Context Slot Utilization", slotSb.String(), cardWidth, false, contextBadge)
+
+	// 4. Control Actions Card
+	helpShortcuts := fmt.Sprintf("  %s Restart  %s Stop  %s Stop All  %s Stream Logs  %s Back",
+		StyleHelpKey.Render("[R]"),
+		StyleHelpKey.Render("[S]"),
+		StyleHelpKey.Render("[Ctrl+K]"),
+		StyleHelpKey.Render("[L]"),
+		StyleHelpKey.Render("[Esc]"),
+	)
+	navShortcuts := fmt.Sprintf("  Navigation: %s Select Instance  %s Auto Refresh (1.5s)",
+		StyleHelpKey.Render("[Up/Down/j/k]"),
+		StyleHelpKey.Render("[Tick]"),
+	)
+	controlCard := SurfaceCard("Control Actions", helpShortcuts+"\n"+navShortcuts, cardWidth, false, "")
+
+	return summaryCard + "\n" + instanceCard + "\n" + contextCard + "\n" + controlCard
 }
