@@ -829,40 +829,17 @@ func (m *LifecycleModel) View(width int, height int) string {
 		rightWidth = 40
 	}
 
-	// Status short pills for left panel
-	ghStatusShort := lipgloss.NewStyle().Foreground(ColorMuted).Render("[Not Set]")
-	if m.config.GitHubToken != "" && m.config.HFToken != "" {
-		ghStatusShort = StyleSuccess.Render("[✓ Both Set]")
-	} else if m.config.GitHubToken != "" || m.config.HFToken != "" {
-		ghStatusShort = StyleSuccess.Render("[✓ 1 Set]")
-	}
-
-	llamaStatusShort := StyleSuccess.Render("[Active]")
-	if m.localVersion == "Not Installed" {
-		llamaStatusShort = StyleDanger.Render("[Missing]")
-	}
-
-	onnxStatusShort := StyleSuccess.Render("[v1.29]")
-	if m.onnxLocalVersion == "Not Installed" {
-		onnxStatusShort = StyleDanger.Render("[Missing]")
-	} else if m.onnxLocalVersion != "" && m.onnxLocalVersion != "Unknown" {
-		onnxStatusShort = lipgloss.NewStyle().Foreground(ColorWhite).Render("[" + m.onnxLocalVersion + "]")
-	}
-
-	appStatusShort := lipgloss.NewStyle().Foreground(ColorWhite).Render("[" + m.appVersion + "]")
-
 	// 1. Left Column: Components Navigation List
 	var leftSB strings.Builder
 	leftSB.WriteString("\n")
 	sections := []struct {
-		idx   int
-		name  string
-		badge string
+		idx  int
+		name string
 	}{
-		{0, "1. API Tokens", ghStatusShort},
-		{1, "2. llama.cpp", llamaStatusShort},
-		{2, "3. ONNX Runtime", onnxStatusShort},
-		{3, "4. Runora App", appStatusShort},
+		{0, "API Token"},
+		{1, "llama.cpp"},
+		{2, "ONNX Runtime"},
+		{3, "Runora App"},
 	}
 
 	for _, s := range sections {
@@ -877,13 +854,16 @@ func (m *LifecycleModel) View(width int, height int) string {
 			nameStyle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 		}
 
-		leftSB.WriteString(fmt.Sprintf("%s%-14s %s\n\n", prefix, nameStyle.Render(s.name), s.badge))
+		leftSB.WriteString(fmt.Sprintf("%s%s\n\n", prefix, nameStyle.Render(s.name)))
 	}
-	leftSB.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  [↑/↓: Select Section]"))
+	leftSB.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  [↑/↓: Select]"))
 	leftContent := strings.TrimRight(leftSB.String(), "\n")
 
-	cardHeight := max(15, height-3)
-	leftCard := SurfaceCardWithHeight("Components", leftContent, leftWidth, cardHeight, true, "4 Sections")
+	cardHeight := height
+	if cardHeight < 12 {
+		cardHeight = 12
+	}
+	leftCard := SurfaceCardWithHeight("Components", leftContent, leftWidth, cardHeight, true, "")
 
 	// 2. Right Column: Dynamic Section Inspector
 	var rightCard string
