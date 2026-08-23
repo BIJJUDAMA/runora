@@ -58,7 +58,8 @@ func (d *DashboardModel) View(width int, height int) string {
 	var sb strings.Builder
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("LAUNCH DASHBOARD")))
-	sb.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(d.Model.Name)))
+	modelName := TruncateVisual(d.Model.Name, max(30, width-14), "...")
+	sb.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelName)))
 
 	// Profiles selector row
 	var profsRow []string
@@ -66,7 +67,7 @@ func (d *DashboardModel) View(width int, height int) string {
 		if i == d.ActiveIdx {
 			profsRow = append(profsRow, lipgloss.NewStyle().
 				Background(ColorPrimary).
-				Foreground(ColorWhite).
+				Foreground(ColorTextOnAccent).
 				Bold(true).
 				Padding(0, 1).
 				Render(prof.Name))
@@ -91,12 +92,14 @@ func (d *DashboardModel) View(width int, height int) string {
 		est := hardware.EstimateMemory(d.Model, d.Specs, p.Context)
 		var suitStr string
 		switch est.Suitability {
-		case hardware.SuitabilityFits:
-			suitStr = StyleSuccess.Render("Fits Hardware")
-		case hardware.SuitabilityPartial:
-			suitStr = StyleWarning.Render("Partial Offloading Expected")
+		case hardware.SuitabilityFitsVRAM:
+			suitStr = StyleSuccess.Render("Fits GPU VRAM")
+		case hardware.SuitabilityPartialVRAM:
+			suitStr = StyleWarning.Render("Partial VRAM Offload")
+		case hardware.SuitabilityFitsRAM:
+			suitStr = lipgloss.NewStyle().Foreground(ColorSecondary).Render("Fits System RAM (CPU)")
 		case hardware.SuitabilityExceeds:
-			suitStr = StyleDanger.Render("Exceeds Hardware limits")
+			suitStr = StyleDanger.Render("Exceeds Memory Limits")
 		}
 
 		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("Dynamic Memory Suitability:")))
@@ -110,10 +113,15 @@ func (d *DashboardModel) View(width int, height int) string {
 	cmdPreview := fmt.Sprintf("llama-server --model %s --host %s --port %d --ctx-size %d --threads %d --n-gpu-layers %d --batch-size %d",
 		d.Model.FilePath, p.Host, p.Port, p.Context, p.Threads, p.GPULayers, p.BatchSize)
 	
+	cmdWidth := width - 6
+	if cmdWidth < 20 {
+		cmdWidth = 20
+	}
+
 	wrappedCmd := lipgloss.NewStyle().
 		Foreground(ColorSecondary).
 		Italic(true).
-		Width(width - 6).
+		Width(cmdWidth).
 		Render(cmdPreview)
 
 	sb.WriteString(fmt.Sprintf("  %s\n  %s\n\n", lipgloss.NewStyle().Bold(true).Render("Launch Command Preview:"), wrappedCmd))

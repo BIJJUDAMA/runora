@@ -338,9 +338,10 @@ var (
 	StyleTagPill       lipgloss.Style
 
 	// Severity / Status
-	StyleSuccess lipgloss.Style
-	StyleWarning lipgloss.Style
-	StyleDanger  lipgloss.Style
+	StyleSecondary lipgloss.Style
+	StyleSuccess   lipgloss.Style
+	StyleWarning   lipgloss.Style
+	StyleDanger    lipgloss.Style
 )
 
 func init() {
@@ -469,6 +470,7 @@ func ApplyTheme(themeName string) {
 		Foreground(ColorTextMuted).
 		Padding(0, 1)
 
+	StyleSecondary = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true)
 	StyleSuccess = lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true)
 	StyleWarning = lipgloss.NewStyle().Foreground(ColorWarning).Bold(true)
 	StyleDanger = lipgloss.NewStyle().Foreground(ColorDanger).Bold(true)
@@ -480,6 +482,9 @@ func RenderProgressBar(percent float64, width int, filledColor lipgloss.Terminal
 	}
 	if percent > 100 {
 		percent = 100
+	}
+	if width < 5 {
+		width = 5
 	}
 	filledCount := int(percent / 100.0 * float64(width))
 	if filledCount < 0 {
@@ -499,8 +504,11 @@ func RenderProgressBar(percent float64, width int, filledColor lipgloss.Terminal
 		emptyStr = strings.Repeat("░", emptyCount)
 	}
 
+	if filledColor == nil {
+		filledColor = ColorProgressFilled
+	}
 	filledStyle := lipgloss.NewStyle().Foreground(filledColor)
-	emptyStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	emptyStyle := lipgloss.NewStyle().Foreground(ColorProgressEmpty)
 
 	return filledStyle.Render(filledStr) + emptyStyle.Render(emptyStr)
 }
