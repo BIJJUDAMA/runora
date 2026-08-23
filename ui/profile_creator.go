@@ -1,10 +1,7 @@
 package ui
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -12,12 +9,21 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/profile"
+)
+
+type ProfileCreatorMode int
+
+const (
+	ModeCreate ProfileCreatorMode = iota
+	ModeEdit
+	ModeDuplicate
 )
 
 type ProfileCreatorModel struct {
 	profilesDir string
+	mode        ProfileCreatorMode
+	origName    string
 	nameInput   textinput.Model
 	ctxInput    textinput.Model
 	gpuInput    textinput.Model
@@ -49,6 +55,55 @@ func NewProfileCreatorModel(profilesDir string) *ProfileCreatorModel {
 
 	return &ProfileCreatorModel{
 		profilesDir: profilesDir,
+		mode:        ModeCreate,
+		nameInput:   nameTi,
+		ctxInput:    ctxTi,
+		gpuInput:    gpuTi,
+		portInput:   portTi,
+		focusIndex:  0,
+	}
+}
+
+func NewProfileEditorModel(profilesDir string, p *profile.Profile, isDuplicate bool) *ProfileCreatorModel {
+	nameTi := textinput.New()
+	nameTi.Placeholder = "Enter profile name..."
+	nameTi.CharLimit = 50
+	nameTi.Width = 40
+
+	if isDuplicate {
+		nameTi.SetValue(p.Name + " (Copy)")
+	} else {
+		nameTi.SetValue(p.Name)
+	}
+	nameTi.Focus()
+
+	ctxTi := textinput.New()
+	ctxTi.Placeholder = "Enter context size (e.g. 8192, 16384)..."
+	ctxTi.CharLimit = 10
+	ctxTi.Width = 25
+	ctxTi.SetValue(strconv.FormatUint(uint64(p.Context), 10))
+
+	gpuTi := textinput.New()
+	gpuTi.Placeholder = "Layers to offload (0 for CPU, 999 for max)..."
+	gpuTi.CharLimit = 5
+	gpuTi.Width = 25
+	gpuTi.SetValue(strconv.Itoa(p.GPULayers))
+
+	portTi := textinput.New()
+	portTi.Placeholder = "Server port (e.g. 50505)..."
+	portTi.CharLimit = 5
+	portTi.Width = 25
+	portTi.SetValue(strconv.Itoa(p.Port))
+
+	mode := ModeEdit
+	if isDuplicate {
+		mode = ModeDuplicate
+	}
+
+	return &ProfileCreatorModel{
+		profilesDir: profilesDir,
+		mode:        mode,
+		origName:    p.Name,
 		nameInput:   nameTi,
 		ctxInput:    ctxTi,
 		gpuInput:    gpuTi,
@@ -134,17 +189,15 @@ func (pc *ProfileCreatorModel) Update(msg tea.Msg) (tea.Cmd, bool, bool) {
 				return nil, false, false
 			}
 
-			// Sanitize filename of reserved characters & Windows device names
-			cleanName := profile.SanitizeProfileName(name)
-			fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
-			_ = os.MkdirAll(pc.profilesDir, 0755)
-			filePath := filepath.Join(pc.profilesDir, fileName)
-
-			data, err := json.MarshalIndent(newProfile, "", "  ")
-			if err == nil {
-				if werr := config.AtomicWriteFile(filePath, data, 0644); werr != nil {
-					return nil, false, false
+			// If editing and name changed, remove old profile if not default
+			if pc.mode == ModeEdit && pc.origName != "" && pc.origName != name {
+				if !profile.IsDefaultProfile(pc.origName) {
+					_ = profile.DeleteProfile(pc.profilesDir, pc.origName)
 				}
+			}
+
+			if err := profile.SaveProfile(pc.profilesDir, newProfile); err != nil {
+				return nil, false, false
 			}
 
 			return nil, true, true
@@ -175,7 +228,17 @@ func (pc *ProfileCreatorModel) updateFocus() {
 func (pc *ProfileCreatorModel) View(width int, height int) string {
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("CREATE CUSTOM PROFILE")))
+
+	var title string
+	switch pc.mode {
+	case ModeEdit:
+		title = fmt.Sprintf("EDIT PROFILE: %s", pc.origName)
+	case ModeDuplicate:
+		title = fmt.Sprintf("DUPLICATE PROFILE: %s", pc.origName)
+	default:
+		title = "CREATE CUSTOM PROFILE"
+	}
+	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(title)))
 
 	nameStyle := lipgloss.NewStyle().Foreground(ColorWhite)
 	ctxStyle := lipgloss.NewStyle().Foreground(ColorWhite)

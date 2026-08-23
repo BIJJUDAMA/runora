@@ -3,7 +3,9 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/model"
@@ -16,6 +18,8 @@ type DashboardModel struct {
 	Profiles      []*profile.Profile
 	ActiveIdx     int
 	Width, Height int
+	ToastMessage  string
+	ToastExpiry   time.Time
 }
 
 func NewDashboardModel(m *model.GGUFMetadata, specs *hardware.HardwareSpecs, profiles []*profile.Profile, activeProfile string) *DashboardModel {
@@ -39,6 +43,12 @@ func (d *DashboardModel) ActiveProfile() *profile.Profile {
 	if len(d.Profiles) == 0 {
 		return nil
 	}
+	if d.ActiveIdx >= len(d.Profiles) {
+		d.ActiveIdx = len(d.Profiles) - 1
+	}
+	if d.ActiveIdx < 0 {
+		d.ActiveIdx = 0
+	}
 	return d.Profiles[d.ActiveIdx]
 }
 
@@ -47,6 +57,35 @@ func (d *DashboardModel) CycleProfile(direction int) {
 		return
 	}
 	d.ActiveIdx = (d.ActiveIdx + direction + len(d.Profiles)) % len(d.Profiles)
+}
+
+func (d *DashboardModel) SetToast(msg string) {
+	d.ToastMessage = msg
+	d.ToastExpiry = time.Now().Add(4 * time.Second)
+}
+
+func (d *DashboardModel) GetLaunchCommand() string {
+	p := d.ActiveProfile()
+	if p == nil || d.Model == nil {
+		return ""
+	}
+	return fmt.Sprintf("llama-server --model %s --host %s --port %d --ctx-size %d --threads %d --n-gpu-layers %d --batch-size %d",
+		d.Model.FilePath, p.Host, p.Port, p.Context, p.Threads, p.GPULayers, p.BatchSize)
+}
+
+func (d *DashboardModel) CopyCommandToClipboard() error {
+	cmdStr := d.GetLaunchCommand()
+	if cmdStr == "" {
+		d.SetToast("No launch command available to copy")
+		return fmt.Errorf("no command available")
+	}
+	err := clipboard.WriteAll(cmdStr)
+	if err == nil {
+		d.SetToast("✓ Command copied to clipboard!")
+	} else {
+		d.SetToast(fmt.Sprintf("Failed to copy to clipboard: %v", err))
+	}
+	return err
 }
 
 func (d *DashboardModel) View(width int, height int) string {
@@ -64,18 +103,23 @@ func (d *DashboardModel) View(width int, height int) string {
 	// Profiles selector row
 	var profsRow []string
 	for i, prof := range d.Profiles {
+		isDefault := profile.IsDefaultProfile(prof.Name)
+		profLabel := prof.Name
+		if !isDefault {
+			profLabel = prof.Name + "*"
+		}
 		if i == d.ActiveIdx {
 			profsRow = append(profsRow, lipgloss.NewStyle().
 				Background(ColorPrimary).
 				Foreground(ColorTextOnAccent).
 				Bold(true).
 				Padding(0, 1).
-				Render(prof.Name))
+				Render(profLabel))
 		} else {
 			profsRow = append(profsRow, lipgloss.NewStyle().
 				Foreground(ColorMuted).
 				Padding(0, 1).
-				Render(prof.Name))
+				Render(profLabel))
 		}
 	}
 	sb.WriteString("  Profile:  " + strings.Join(profsRow, "  ") + "\n\n")
@@ -110,8 +154,7 @@ func (d *DashboardModel) View(width int, height int) string {
 	}
 
 	// Command preview
-	cmdPreview := fmt.Sprintf("llama-server --model %s --host %s --port %d --ctx-size %d --threads %d --n-gpu-layers %d --batch-size %d",
-		d.Model.FilePath, p.Host, p.Port, p.Context, p.Threads, p.GPULayers, p.BatchSize)
+	cmdPreview := d.GetLaunchCommand()
 	
 	cmdWidth := width - 6
 	if cmdWidth < 20 {
@@ -126,12 +169,26 @@ func (d *DashboardModel) View(width int, height int) string {
 
 	sb.WriteString(fmt.Sprintf("  %s\n  %s\n\n", lipgloss.NewStyle().Bold(true).Render("Launch Command Preview:"), wrappedCmd))
 
+	// Toast notification banner if present and not expired
+	if d.ToastMessage != "" && (d.ToastExpiry.IsZero() || time.Now().Before(d.ToastExpiry)) {
+		toastStyle := lipgloss.NewStyle().
+			Background(ColorPrimary).
+			Foreground(ColorTextOnAccent).
+			Bold(true).
+			Padding(0, 2)
+		sb.WriteString(fmt.Sprintf("  %s\n\n", toastStyle.Render(d.ToastMessage)))
+	}
+
 	// Help prompts
-	helpStr := fmt.Sprintf("%s Launch  %s Cycle profiles  %s Create profile  %s Cancel",
-		StyleHelpKey.Render("[Enter/Y]"),
-		StyleHelpKey.Render("[Left/Right]"),
+	helpStr := fmt.Sprintf("%s Launch  %s Cycle  %s New  %s Edit  %s Dupl  %s Del  %s Copy Cmd  %s Back",
+		StyleHelpKey.Render("[Enter]"),
+		StyleHelpKey.Render("[←/→]"),
 		StyleHelpKey.Render("[P]"),
-		StyleHelpKey.Render("[Esc/C]"),
+		StyleHelpKey.Render("[E]"),
+		StyleHelpKey.Render("[N]"),
+		StyleHelpKey.Render("[D]"),
+		StyleHelpKey.Render("[C]"),
+		StyleHelpKey.Render("[Esc]"),
 	)
 	sb.WriteString("  " + helpStr + "\n")
 
