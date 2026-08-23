@@ -77,3 +77,113 @@ func TestProfileDefaultsAndLoading(t *testing.T) {
 		t.Errorf("custom profile 'Coding Special' was not loaded")
 	}
 }
+
+func TestProfileValidation(t *testing.T) {
+	validProfile := &Profile{
+		Name:      "Valid Profile",
+		Context:   2048,
+		Threads:   4,
+		GPULayers: 33,
+		BatchSize: 512,
+		Host:      "127.0.0.1",
+		Port:      8080,
+	}
+
+	if err := validProfile.Validate(); err != nil {
+		t.Errorf("expected valid profile to pass validation, got: %v", err)
+	}
+
+	// Empty name
+	pEmptyName := *validProfile
+	pEmptyName.Name = "   "
+	if err := pEmptyName.Validate(); err == nil {
+		t.Errorf("expected empty name to fail validation")
+	}
+
+	// Reserved Windows name
+	for _, reserved := range []string{"CON", "con", "prn", "AUX", "Nul", "com1", "COM9", "lpt1", "LPT9"} {
+		pReserved := *validProfile
+		pReserved.Name = reserved
+		if err := pReserved.Validate(); err == nil {
+			t.Errorf("expected reserved name %q to fail validation", reserved)
+		}
+	}
+
+	// Invalid characters
+	pInvalidChars := *validProfile
+	pInvalidChars.Name = "Invalid/Name:Test"
+	if err := pInvalidChars.Validate(); err == nil {
+		t.Errorf("expected invalid characters to fail validation")
+	}
+
+	// Context < 256
+	pLowCtx := *validProfile
+	pLowCtx.Context = 128
+	if err := pLowCtx.Validate(); err == nil {
+		t.Errorf("expected context < 256 to fail validation")
+	}
+
+	// GPU Layers out of range [0..999]
+	pNegativeGPU := *validProfile
+	pNegativeGPU.GPULayers = -1
+	if err := pNegativeGPU.Validate(); err == nil {
+		t.Errorf("expected GPU layers < 0 to fail validation")
+	}
+	pHighGPU := *validProfile
+	pHighGPU.GPULayers = 1000
+	if err := pHighGPU.Validate(); err == nil {
+		t.Errorf("expected GPU layers > 999 to fail validation")
+	}
+
+	// Threads < 1
+	pZeroThreads := *validProfile
+	pZeroThreads.Threads = 0
+	if err := pZeroThreads.Validate(); err == nil {
+		t.Errorf("expected threads < 1 to fail validation")
+	}
+
+	// Port out of range [1024..65535]
+	pLowPort := *validProfile
+	pLowPort.Port = 80
+	if err := pLowPort.Validate(); err == nil {
+		t.Errorf("expected port < 1024 to fail validation")
+	}
+	pHighPort := *validProfile
+	pHighPort.Port = 70000
+	if err := pHighPort.Validate(); err == nil {
+		t.Errorf("expected port > 65535 to fail validation")
+	}
+}
+
+func TestReservedWindowsNames(t *testing.T) {
+	if !IsReservedWindowsName("CON") {
+		t.Errorf("expected CON to be reserved")
+	}
+	if !IsReservedWindowsName("con.json") {
+		t.Errorf("expected con.json to be reserved")
+	}
+	if !IsReservedWindowsName("aux") {
+		t.Errorf("expected aux to be reserved")
+	}
+	if !IsReservedWindowsName("COM5") {
+		t.Errorf("expected COM5 to be reserved")
+	}
+	if !IsReservedWindowsName("lpt3") {
+		t.Errorf("expected lpt3 to be reserved")
+	}
+	if IsReservedWindowsName("normal_profile") {
+		t.Errorf("expected normal_profile to not be reserved")
+	}
+}
+
+func TestSanitizeProfileName(t *testing.T) {
+	sanitized := SanitizeProfileName("CON")
+	if sanitized != "CON_profile" {
+		t.Errorf("expected 'CON_profile', got %q", sanitized)
+	}
+
+	sanitizedChars := SanitizeProfileName("test/profile:name*")
+	if sanitizedChars != "test_profile_name_" {
+		t.Errorf("expected 'test_profile_name_', got %q", sanitizedChars)
+	}
+}
