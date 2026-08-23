@@ -209,7 +209,8 @@ func (d *DashboardModel) View(width int, height int) string {
 		leftContent.WriteString("  No model selected.\n")
 	}
 
-	leftCard := SurfaceCard("Hardware Fit & Memory Estimate", leftContent.String(), leftColWidth, true, suitabilityBadge)
+	cardHeight := max(16, height-3)
+	leftCard := SurfaceCardWithHeight("Hardware Fit & Memory Estimate", leftContent.String(), leftColWidth, cardHeight, true, suitabilityBadge)
 
 	// ── Right Column: Top Card - Execution Profile ──
 	var profileContent strings.Builder
@@ -254,7 +255,9 @@ func (d *DashboardModel) View(width int, height int) string {
 	if !profile.IsDefaultProfile(p.Name) {
 		activeProfileBadge = p.Name + "*"
 	}
-	topRightCard := SurfaceCard("Execution Profile", profileContent.String(), rightColWidth, false, activeProfileBadge)
+	rightTopHeight := (cardHeight * 6) / 10
+	rightBotHeight := cardHeight - rightTopHeight
+	topRightCard := SurfaceCardWithHeight("Execution Profile", profileContent.String(), rightColWidth, rightTopHeight, false, activeProfileBadge)
 
 	// ── Right Column: Bottom Card - Launch Command Preview ──
 	var previewContent strings.Builder
@@ -273,7 +276,7 @@ func (d *DashboardModel) View(width int, height int) string {
 	previewContent.WriteString("\n\n")
 	previewContent.WriteString(fmt.Sprintf("  %s Copy to clipboard", StyleHelpKey.Render("[C]")))
 
-	botRightCard := SurfaceCard("Launch Command Preview", previewContent.String(), rightColWidth, false, "CLI")
+	botRightCard := SurfaceCardWithHeight("Launch Command Preview", previewContent.String(), rightColWidth, rightBotHeight, false, "CLI")
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, topRightCard, botRightCard)
 
 	bentoGrid := lipgloss.JoinHorizontal(lipgloss.Top, leftCard, rightCol)
