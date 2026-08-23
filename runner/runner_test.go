@@ -94,3 +94,75 @@ llama_tokens_evaluated_total 1000
 		t.Errorf("expected 1420 total tokens, got %d", tokens)
 	}
 }
+
+func TestLlamaCppDriverCommandArgs(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama-driver-args-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	binName := "llama-server"
+	if os.PathSeparator == '\\' {
+		binName = "llama-server.exe"
+	}
+	binPath := filepath.Join(tempDir, binName)
+	_ = os.WriteFile(binPath, []byte("dummy binary"), 0755)
+
+	driver := NewLlamaCppDriver()
+	opts := StartOptions{
+		LlamaCppDir: tempDir,
+		Host:        "127.0.0.1",
+		Port:        8080,
+		ContextSize: 4096,
+		Threads:     8,
+		GPULayers:   999,
+		BatchSize:   512,
+		CacheTypeK:  "q8_0",
+		CacheTypeV:  "q4_0",
+		CustomArgs:  "--temp 0.7 --top-p 0.9",
+	}
+
+	cmd, err := driver.BuildCommand(nil, "model.gguf", opts, nil)
+	if err != nil {
+		t.Fatalf("BuildCommand failed: %v", err)
+	}
+
+	args := cmd.Args
+	hasFlashAttn := false
+	hasCacheK := false
+	hasCacheV := false
+	hasTemp := false
+	hasTopP := false
+
+	for i, a := range args {
+		if a == "--flash-attn" {
+			hasFlashAttn = true
+		}
+		if a == "--cache-type-k" && i+1 < len(args) && args[i+1] == "q8_0" {
+			hasCacheK = true
+		}
+		if a == "--cache-type-v" && i+1 < len(args) && args[i+1] == "q4_0" {
+			hasCacheV = true
+		}
+		if a == "--temp" && i+1 < len(args) && args[i+1] == "0.7" {
+			hasTemp = true
+		}
+		if a == "--top-p" && i+1 < len(args) && args[i+1] == "0.9" {
+			hasTopP = true
+		}
+	}
+
+	if !hasFlashAttn {
+		t.Errorf("expected command args to include '--flash-attn', got: %v", args)
+	}
+	if !hasCacheK {
+		t.Errorf("expected command args to include '--cache-type-k q8_0', got: %v", args)
+	}
+	if !hasCacheV {
+		t.Errorf("expected command args to include '--cache-type-v q4_0', got: %v", args)
+	}
+	if !hasTemp || !hasTopP {
+		t.Errorf("expected command args to include custom args, got: %v", args)
+	}
+}

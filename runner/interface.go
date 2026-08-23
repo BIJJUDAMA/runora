@@ -39,16 +39,20 @@ type InstanceInfo struct {
 }
 
 type StartOptions struct {
-	LlamaCppDir string // Specific to llama.cpp binaries
-	ContextSize uint32
-	Threads     int
-	GPULayers   int
-	BatchSize   int
-	Host        string
-	Port        int
-	Task        TaskType
-	Backend     BackendType
-	VersionTag  string
+	LlamaCppDir    string // Specific to llama.cpp binaries
+	ContextSize    uint32
+	Threads        int
+	GPULayers      int
+	BatchSize      int
+	Host           string
+	Port           int
+	Task           TaskType
+	Backend        BackendType
+	VersionTag     string
+	FlashAttention bool
+	CacheTypeK     string
+	CacheTypeV     string
+	CustomArgs     string
 }
 
 type ModelRuntime interface {

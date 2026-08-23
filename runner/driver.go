@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -72,6 +73,20 @@ func (d *LlamaCppDriver) BuildCommand(ctx context.Context, modelPath string, opt
 	if opts.BatchSize > 0 {
 		args = append(args, "--batch-size", fmt.Sprintf("%d", opts.BatchSize))
 	}
+	// Flash Attention is enabled by default for all llama.cpp server launches
+	args = append(args, "--flash-attn")
+
+	if opts.CacheTypeK != "" {
+		args = append(args, "--cache-type-k", opts.CacheTypeK)
+	}
+	if opts.CacheTypeV != "" {
+		args = append(args, "--cache-type-v", opts.CacheTypeV)
+	}
+	if opts.CustomArgs != "" {
+		customFields := strings.Fields(opts.CustomArgs)
+		args = append(args, customFields...)
+	}
+
 	if opts.Task == TaskEmbedding {
 		args = append(args, "--embedding")
 	} else if opts.Task == TaskReranking {
