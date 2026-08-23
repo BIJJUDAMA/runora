@@ -246,7 +246,7 @@ func getUnixGPUs(totalRAM uint64) []GPUSpecs {
 			}
 			vram := AppleSiliconMetalVRAM(totalRAM)
 			if vram == 0 {
-				vram = uint64(float64(8*1024*1024*1024) * 0.67)
+				vram = uint64(8 * 1024 * 1024 * 1024 * 67 / 100)
 			}
 			return []GPUSpecs{{
 				Name: "Apple Silicon GPU",
