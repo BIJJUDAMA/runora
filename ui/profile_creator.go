@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/profile"
 )
 
@@ -94,23 +95,23 @@ func (pc *ProfileCreatorModel) Update(msg tea.Msg) (tea.Cmd, bool, bool) {
 			return nil, true, false
 		case "enter":
 			name := strings.TrimSpace(pc.nameInput.Value())
-			if name == "" {
+			if name == "" || profile.IsReservedWindowsName(name) {
 				return nil, false, false
 			}
 
 			// Parse values with default fallbacks
 			ctxVal := uint32(2048)
-			if c, err := strconv.ParseUint(strings.TrimSpace(pc.ctxInput.Value()), 10, 32); err == nil {
+			if c, err := strconv.ParseUint(strings.TrimSpace(pc.ctxInput.Value()), 10, 32); err == nil && c >= 256 {
 				ctxVal = uint32(c)
 			}
 
 			gpuVal := 999
-			if g, err := strconv.Atoi(strings.TrimSpace(pc.gpuInput.Value())); err == nil {
+			if g, err := strconv.Atoi(strings.TrimSpace(pc.gpuInput.Value())); err == nil && g >= 0 && g <= 999 {
 				gpuVal = g
 			}
 
 			portVal := 50505
-			if p, err := strconv.Atoi(strings.TrimSpace(pc.portInput.Value())); err == nil {
+			if p, err := strconv.Atoi(strings.TrimSpace(pc.portInput.Value())); err == nil && p >= 1024 && p <= 65535 {
 				portVal = p
 			}
 
@@ -129,12 +130,21 @@ func (pc *ProfileCreatorModel) Update(msg tea.Msg) (tea.Cmd, bool, bool) {
 				Port:      portVal,
 			}
 
-			fileName := strings.ReplaceAll(strings.ToLower(name), " ", "_") + ".json"
+			if err := newProfile.Validate(); err != nil {
+				return nil, false, false
+			}
+
+			// Sanitize filename of reserved characters & Windows device names
+			cleanName := profile.SanitizeProfileName(name)
+			fileName := strings.ReplaceAll(strings.ToLower(cleanName), " ", "_") + ".json"
+			_ = os.MkdirAll(pc.profilesDir, 0755)
 			filePath := filepath.Join(pc.profilesDir, fileName)
 
 			data, err := json.MarshalIndent(newProfile, "", "  ")
 			if err == nil {
-				_ = os.WriteFile(filePath, data, 0644)
+				if werr := config.AtomicWriteFile(filePath, data, 0644); werr != nil {
+					return nil, false, false
+				}
 			}
 
 			return nil, true, true
