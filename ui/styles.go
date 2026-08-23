@@ -923,7 +923,7 @@ func GlobalTabHeader(activeScreen ScreenMode, width int, runningCount int, vramG
 		vramStr = lipgloss.NewStyle().Foreground(vramColor).Render(vramGauge)
 	}
 
-	brand := "RUNORA // RUNTIME MANAGER v1.2"
+	brand := "RUNORA // RUNTIME MANAGER"
 	if ThemeGradientStart != "" && ThemeGradientEnd != "" {
 		brand = RenderGradientText(brand, ThemeGradientStart, ThemeGradientEnd)
 	} else {

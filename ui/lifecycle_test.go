@@ -1,4 +1,4 @@
-﻿package ui
+package ui
 
 import (
 	"strings"
@@ -40,14 +40,15 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	// 1. Standard Settings Bento Layout View
 	view := model.View(100, 40)
 
-	// Verify all 3 Bento Cards are present
+	// Verify all 4 Bento Cards are present
 	expectedCards := []struct {
 		title string
 		badge string
 	}{
-		{"Runtime Version & Acceleration", "llama.cpp"},
-		{"API Credentials", "GitHub / Hugging Face"},
-		{"Backup & Rollback", "Recovery"},
+		{"API Credentials", "GitHub & Hugging Face"},
+		{"1. Engine: llama.cpp Runtime", "llama.cpp"},
+		{"2. Engine: ONNX Runtime", "ONNX"},
+		{"3. Runora System & Tools", "System"},
 	}
 
 	for _, card := range expectedCards {
@@ -59,7 +60,7 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 		}
 	}
 
-	// Verify Runtime Version & Acceleration card details
+	// Verify llama.cpp card details
 	if !strings.Contains(view, "Active Version Slot:") {
 		t.Errorf("expected view to contain 'Active Version Slot:', got:\n%s", view)
 	}
@@ -76,6 +77,16 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 		t.Errorf("expected view to contain 'Installed Slots:', got:\n%s", view)
 	}
 
+	// Verify ONNX card details
+	if !strings.Contains(view, "Installed Version:") {
+		t.Errorf("expected view to contain 'Installed Version:', got:\n%s", view)
+	}
+
+	// Verify Runora System card details
+	if !strings.Contains(view, "Runora Version:") {
+		t.Errorf("expected view to contain 'Runora Version:', got:\n%s", view)
+	}
+
 	// Verify API Credentials masked tokens and actions
 	if !strings.Contains(view, "ghp_***") {
 		t.Errorf("expected view to contain masked GitHub Token 'ghp_***', got:\n%s", view)
@@ -83,22 +94,11 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	if !strings.Contains(view, "hf_***") {
 		t.Errorf("expected view to contain masked HF Token 'hf_***', got:\n%s", view)
 	}
-	if !strings.Contains(view, "[E]") && !strings.Contains(view, "Edit") {
-		t.Errorf("expected view to contain '[E] Edit' action, got:\n%s", view)
+	if !strings.Contains(view, "[G: Edit / Paste]") && !strings.Contains(view, "[G]") {
+		t.Errorf("expected view to contain '[G]' action, got:\n%s", view)
 	}
-	if !strings.Contains(view, "[S]") && !strings.Contains(view, "Save") {
-		t.Errorf("expected view to contain '[S] Save' action, got:\n%s", view)
-	}
-
-	// Verify Backup & Rollback card details
-	if !strings.Contains(view, "llama.cpp Backup:") {
-		t.Errorf("expected view to contain 'llama.cpp Backup:', got:\n%s", view)
-	}
-	if !strings.Contains(view, "ONNX Runtime Backup:") {
-		t.Errorf("expected view to contain 'ONNX Runtime Backup:', got:\n%s", view)
-	}
-	if !strings.Contains(view, "Recovery rollbacks") {
-		t.Errorf("expected view to contain recovery information, got:\n%s", view)
+	if !strings.Contains(view, "[T: Edit / Paste]") && !strings.Contains(view, "[T]") {
+		t.Errorf("expected view to contain '[T]' action, got:\n%s", view)
 	}
 
 	// 2. Strict Zero Emojis check in standard view
@@ -109,51 +109,26 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	}
 
 	// 3. Test Token Edit Mode
-	// Enter token edit mode via key 'e'
-	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	// Enter token edit mode via key 'g'
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	if !model.tokenEditActive {
-		t.Fatalf("expected tokenEditActive to be true after pressing 'e'")
+		t.Fatalf("expected tokenEditActive to be true after pressing 'g'")
 	}
 	editView := model.View(100, 40)
 
 	if !strings.Contains(editView, "API Credentials") {
 		t.Errorf("expected edit view to maintain API Credentials card, got:\n%s", editView)
 	}
-	if !strings.Contains(editView, "Editing:") {
-		t.Errorf("expected edit view to contain 'Editing:', got:\n%s", editView)
+	if !strings.Contains(editView, "EDITING:") {
+		t.Errorf("expected edit view to contain 'EDITING:', got:\n%s", editView)
 	}
-	if !strings.Contains(editView, "[Enter/S]") && !strings.Contains(editView, "Save") {
+	if !strings.Contains(editView, "[Enter]") && !strings.Contains(editView, "Save") {
 		t.Errorf("expected edit view to contain save prompt, got:\n%s", editView)
 	}
 
 	for _, r := range editView {
 		if isEmoji(r) {
 			t.Errorf("LifecycleModel.View in edit mode contains emoji %q in output", string(r))
-		}
-	}
-
-	// 4. Test ONNX Runtime selected view for zero emojis
-	model.tokenEditActive = false
-	model.SelectedRuntime = 1
-	onnxView := model.View(100, 40)
-	if !strings.Contains(onnxView, "ONNX Runtime") {
-		t.Errorf("expected ONNX view to contain 'ONNX Runtime', got:\n%s", onnxView)
-	}
-	for _, r := range onnxView {
-		if isEmoji(r) {
-			t.Errorf("LifecycleModel.View (ONNX) contains emoji %q in output", string(r))
-		}
-	}
-
-	// 5. Test Runora App selected view for zero emojis
-	model.SelectedRuntime = 2
-	appView := model.View(100, 40)
-	if !strings.Contains(appView, "Runora CLI") {
-		t.Errorf("expected App view to contain 'Runora CLI', got:\n%s", appView)
-	}
-	for _, r := range appView {
-		if isEmoji(r) {
-			t.Errorf("LifecycleModel.View (App) contains emoji %q in output", string(r))
 		}
 	}
 }
