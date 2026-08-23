@@ -1,4 +1,4 @@
-﻿package runner
+package runner
 
 import (
 	"context"
@@ -291,4 +291,19 @@ func (ps *ProcessSupervisor) GetInstance(port int) (*ManagedInstance, bool) {
 	defer ps.mu.Unlock()
 	inst, exists := ps.instances[port]
 	return inst, exists
+}
+
+// LogDir returns the configured supervisor log directory.
+func (ps *ProcessSupervisor) LogDir() string {
+	return ps.logDir
+}
+
+// GetLogPath returns the path to the log file for an instance on the given port.
+func (ps *ProcessSupervisor) GetLogPath(port int) string {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if inst, ok := ps.instances[port]; ok {
+		return inst.LogFile
+	}
+	return filepath.Join(ps.logDir, fmt.Sprintf("server-%d.log", port))
 }

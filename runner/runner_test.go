@@ -1,6 +1,9 @@
 package runner
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,5 +44,53 @@ func TestMultiInstanceTracking(t *testing.T) {
 	status, model, port := runner.GetStatus()
 	if status != StatusStopped || model != "" || port != 50505 {
 		t.Errorf("incorrect stopped status values: %d, %q, %d", status, model, port)
+	}
+}
+
+func TestQueryServerSlotsAndTokens(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slots", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"id": 0, "n_ctx": 8192, "n_past": 5324, "is_processing": true, "state": 1},
+			{"id": 1, "n_ctx": 8192, "n_past": 0, "is_processing": false, "state": 0}
+		]`))
+	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(`
+# HELP llama_tokens_predicted_total Total number of predicted tokens.
+llama_tokens_predicted_total 420
+# HELP llama_tokens_evaluated_total Total number of evaluated tokens.
+llama_tokens_evaluated_total 1000
+`))
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	var port int
+	_, _ = fmt.Sscanf(server.URL, "http://127.0.0.1:%d", &port)
+
+	slots, err := QueryServerSlots(port)
+	if err != nil {
+		t.Fatalf("QueryServerSlots failed: %v", err)
+	}
+	if slots.TotalNCtx != 16384 {
+		t.Errorf("expected total context 16384, got %d", slots.TotalNCtx)
+	}
+	if slots.TotalNPast != 5324 {
+		t.Errorf("expected total past tokens 5324, got %d", slots.TotalNPast)
+	}
+	if slots.ActiveSlots != 1 {
+		t.Errorf("expected 1 active slot, got %d", slots.ActiveSlots)
+	}
+
+	tokens, err := QueryServerTokens(port)
+	if err != nil {
+		t.Fatalf("QueryServerTokens failed: %v", err)
+	}
+	if tokens != 1420 {
+		t.Errorf("expected 1420 total tokens, got %d", tokens)
 	}
 }
