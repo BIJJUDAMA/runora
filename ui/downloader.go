@@ -22,6 +22,50 @@ const (
 	FocusFileList
 )
 
+type CuratedQuickPick struct {
+	Index       string
+	Name        string
+	Size        string
+	RepoID      string
+	FileName    string
+	DownloadURL string
+}
+
+var CuratedQuickPicks = []CuratedQuickPick{
+	{
+		Index:       "1",
+		Name:        "1. Llama 3.1 8B Instruct (Q4_K_M)",
+		Size:        "4.9 GB",
+		RepoID:      "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+		FileName:    "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+		DownloadURL: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+	},
+	{
+		Index:       "2",
+		Name:        "2. Qwen 2.5 7B Instruct (Q4_K_M)",
+		Size:        "4.7 GB",
+		RepoID:      "Qwen/Qwen2.5-7B-Instruct-GGUF",
+		FileName:    "qwen2.5-7b-instruct-q4_k_m.gguf",
+		DownloadURL: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
+	},
+	{
+		Index:       "3",
+		Name:        "3. DeepSeek Coder 6.7B (Q4_K_M)",
+		Size:        "4.1 GB",
+		RepoID:      "TheBloke/deepseek-coder-6.7B-instruct-GGUF",
+		FileName:    "deepseek-coder-6.7b-instruct.Q4_K_M.gguf",
+		DownloadURL: "https://huggingface.co/TheBloke/deepseek-coder-6.7B-instruct-GGUF/resolve/main/deepseek-coder-6.7b-instruct.Q4_K_M.gguf",
+	},
+	{
+		Index:       "4",
+		Name:        "4. Mistral Nemo 12B (Q4_K_M)",
+		Size:        "7.5 GB",
+		RepoID:      "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
+		FileName:    "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf",
+		DownloadURL: "https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf",
+	},
+}
+
 type DownloaderModel struct {
 	config          *config.Config
 	queue           *model.DownloadQueue
@@ -30,8 +74,8 @@ type DownloaderModel struct {
 	err             error
 	resolving       bool
 
-	urlInput        textinput.Model
-	filenameInput   textinput.Model
+	urlInput      textinput.Model
+	filenameInput textinput.Model
 
 	resolvedFiles   []model.HFSibling
 	selectedFileIdx int
@@ -130,6 +174,16 @@ func (m *DownloaderModel) Update(msg tea.Msg) (*DownloaderModel, tea.Cmd) {
 		case "shift+tab":
 			m.prevFocus()
 
+		case "1", "2", "3", "4":
+			if m.focus == FocusQueue {
+				idx := int(msg.String()[0] - '1')
+				if idx >= 0 && idx < len(CuratedQuickPicks) {
+					qp := CuratedQuickPicks[idx]
+					m.queue.AddTask(qp.Name, qp.FileName, 0, qp.DownloadURL)
+					m.selectedTaskIdx = len(m.queue.GetTasks()) - 1
+				}
+			}
+
 		case "enter":
 			if m.focus == FocusFileList {
 				if len(m.resolvedFiles) > 0 && m.selectedFileIdx >= 0 && m.selectedFileIdx < len(m.resolvedFiles) {
@@ -175,11 +229,6 @@ func (m *DownloaderModel) Update(msg tea.Msg) (*DownloaderModel, tea.Cmd) {
 						parts := strings.Split(repoID, "/")
 						if len(parts) >= 2 {
 							repoID = parts[0] + "/" + parts[1]
-						}
-
-						hfToken := m.config.HFToken
-						if hfToken == "" {
-							hfToken = os.Getenv("HF_TOKEN")
 						}
 
 						if filename != "" {
@@ -362,169 +411,239 @@ func (m *DownloaderModel) moveCursor(dir int) {
 }
 
 func (m *DownloaderModel) View(width int, height int) string {
-	var sb strings.Builder
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("DIRECT MODEL DOWNLOADER (GGUF / ONNX)")))
+	// Top Bento Card: Direct Model Download
+	var inputSb strings.Builder
 
-	// Input form panel
-	var directSb strings.Builder
+	urlLabel := "Direct URL / Hugging Face Repository:"
+	fileLabel := "Destination Filename (optional/required for repositories):"
 
-	urlStyle := lipgloss.NewStyle().Foreground(ColorWhite)
-	fileStyle := lipgloss.NewStyle().Foreground(ColorWhite)
+	urlStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+	fileStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
 	if m.focus == FocusURL {
-		urlStyle = urlStyle.Foreground(ColorSecondary).Bold(true)
+		urlStyle = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true)
 	} else if m.focus == FocusFilename {
-		fileStyle = fileStyle.Foreground(ColorSecondary).Bold(true)
+		fileStyle = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true)
 	}
 
-	directSb.WriteString("  " + urlStyle.Render("Direct URL / Hugging Face Repository:") + "\n")
-	directSb.WriteString("  " + m.urlInput.View() + "\n\n")
-	directSb.WriteString("  " + fileStyle.Render("Destination Filename (optional/required for repositories):") + "\n")
-	directSb.WriteString("  " + m.filenameInput.View() + "\n\n")
-	directSb.WriteString("  " + StyleHelp.Render("Supports direct GGUF/ONNX links or Hugging Face repositories (e.g. unsloth/gemma-4-E4B-it-GGUF).") + "\n")
+	inputSb.WriteString("  " + urlStyle.Render(urlLabel) + "\n")
+	inputSb.WriteString("  " + m.urlInput.View() + "\n\n")
+	inputSb.WriteString("  " + fileStyle.Render(fileLabel) + "\n")
+	inputSb.WriteString("  " + m.filenameInput.View() + "\n\n")
+
+	var tokenBadge string
+	hfToken := ""
+	if m.config != nil {
+		hfToken = m.config.HFToken
+	}
+	if hfToken == "" {
+		hfToken = os.Getenv("HF_TOKEN")
+	}
+	if hfToken != "" {
+		tokenBadge = StyleBadgeFits.Render("[Token Active]")
+	} else {
+		tokenBadge = StyleBadgeStopped.Render("[No HF Token]")
+	}
+
+	hintText := StyleHelp.Render("Supports direct GGUF/ONNX links or Hugging Face repositories (e.g. unsloth/gemma-4-E4B-it-GGUF).")
+	inputSb.WriteString("  " + hintText + "  " + tokenBadge)
 
 	if m.resolving {
-		directSb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorAccent).Render("  Fetching repository files list from Hugging Face...") + "\n")
+		inputSb.WriteString("\n\n  " + lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("Fetching repository files list from Hugging Face..."))
 	}
 
 	if m.err != nil {
-		directSb.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorDanger).Render("  "+m.err.Error()) + "\n")
+		inputSb.WriteString("\n\n  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render(m.err.Error()))
 	}
 
-	linesCount := strings.Count(directSb.String(), "\n")
-	panelHeight := linesCount + 1
-	if panelHeight < 7 {
-		panelHeight = 7
+	// Middle Bento Card: Curated Model Quick-Picks
+	var qpSb strings.Builder
+	qpSb.WriteString("  ")
+	for i, qp := range CuratedQuickPicks {
+		keyBadge := StyleHelpKey.Render(fmt.Sprintf("[%s]", qp.Index))
+		nameStr := lipgloss.NewStyle().Foreground(ColorText).Bold(true).Render(qp.Name)
+		sizeStr := StyleTagPill.Render(qp.Size)
+		qpItem := fmt.Sprintf("%s %s %s", keyBadge, nameStr, sizeStr)
+
+		if i == 0 || i == 2 {
+			qpSb.WriteString(fmt.Sprintf("%-48s", qpItem))
+			if width < 100 {
+				qpSb.WriteString("\n  ")
+			}
+		} else {
+			qpSb.WriteString(qpItem + "\n  ")
+		}
 	}
+	qpSb.WriteString("\n  " + StyleHelp.Render("Tip: Focus queue [Tab] and press [1-4] to instantly queue a curated model."))
 
-	formBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorBorder).
-		Width(width - 6).
-		Height(panelHeight)
-	if m.focus == FocusURL || m.focus == FocusFilename {
-		formBorder = formBorder.BorderForeground(ColorPrimary)
-	}
-
-	sb.WriteString("  " + formBorder.Render(directSb.String()) + "\n\n")
-
-	// Queue panel
+	// Bottom Bento Card: Download Queue & Progress
 	var queueSb strings.Builder
-	queueHeight := height - panelHeight - 16
-	if queueHeight < 4 {
-		queueHeight = 4
-	}
 
 	if m.focus == FocusFileList {
-		queueSb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorSecondary).Render("Select Model File (Enter to download, Esc to cancel):") + "\n")
-		maxVisible := queueHeight - 2
-		if maxVisible < 1 {
-			maxVisible = 1
-		}
-		startIdx := 0
-		if m.selectedFileIdx >= maxVisible {
-			startIdx = m.selectedFileIdx - maxVisible + 1
-		}
-		endIdx := startIdx + maxVisible
-		if endIdx > len(m.resolvedFiles) {
-			endIdx = len(m.resolvedFiles)
-		}
-
-		for idx := startIdx; idx < endIdx; idx++ {
-			f := m.resolvedFiles[idx]
+		queueSb.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(ColorSecondary).Render("Select Model File (Enter to download, Esc to cancel):") + "\n\n")
+		for idx, f := range m.resolvedFiles {
 			row := fmt.Sprintf("  - %s (%s)", f.Rpath, formatSize(f.Size))
 			if idx == m.selectedFileIdx {
-				queueSb.WriteString(StyleSelectedListItem.Width(width - 8).Render(row) + "\n")
+				queueSb.WriteString(StyleSelectedListItem.Width(max(20, width-8)).Render(row) + "\n")
 			} else {
 				queueSb.WriteString(row + "\n")
 			}
 		}
 	} else {
-		queueSb.WriteString(lipgloss.NewStyle().Bold(true).Render("Download Queue:") + "\n")
 		tasks := m.queue.GetTasks()
 		if len(tasks) == 0 {
-			queueSb.WriteString("  Queue is empty. Enter a GGUF/ONNX URL above to start downloading.\n")
+			queueSb.WriteString("  " + StyleMuted.Render("Queue is empty. Enter a direct GGUF/ONNX URL above, or select a Quick-Pick (1-4).") + "\n")
 		} else {
+			startHex := ThemeGradientStart
+			if startHex == "" {
+				startHex = "#7D56F4"
+			}
+			endHex := ThemeGradientEnd
+			if endHex == "" {
+				endHex = "#FF5F87"
+			}
+
+			barWidth := 14
+			if width > 120 {
+				barWidth = 18
+			} else if width < 80 {
+				barWidth = 10
+			}
+
 			for idx, t := range tasks {
-				statusStr := ""
+				var statusStr string
 				switch t.Status {
 				case model.StatusQueued:
-					statusStr = StyleBadgeStopped.Render(" QUEUED ")
+					statusStr = StyleBadgeStopped.Render("[Queued]")
 				case model.StatusDownloading:
-					statusStr = StyleBadgeRunning.Render(" DOWNLOADING ") + fmt.Sprintf(" %.1f KB/s", t.SpeedKBps)
+					statusStr = StyleBadgeRunning.Render("[Downloading]")
 				case model.StatusPaused:
-					statusStr = StyleBadgeStarting.Render(" PAUSED ")
+					statusStr = StyleBadgeStarting.Render("[Paused]")
 				case model.StatusCompleted:
-					statusStr = StyleBadgeRunning.Render(" COMPLETED ")
+					statusStr = StyleBadgeFits.Render("[Completed]")
 				case model.StatusFailed:
-					statusStr = StyleBadgeFailed.Render(" FAILED ") + fmt.Sprintf(": %v", t.Error)
+					statusStr = StyleBadgeFailed.Render("[Failed]")
 				case model.StatusCanceled:
-					statusStr = StyleBadgeStopped.Render(" CANCELED ")
+					statusStr = StyleBadgeStopped.Render("[Canceled]")
 				}
 
-				progressFraction := 0.0
+				progressPct := 0.0
 				if t.TotalSize > 0 {
-					progressFraction = float64(t.Downloaded) / float64(t.TotalSize)
+					progressPct = (float64(t.Downloaded) / float64(t.TotalSize)) * 100.0
+					if progressPct > 100.0 {
+						progressPct = 100.0
+					}
+				} else if t.Status == model.StatusCompleted {
+					progressPct = 100.0
 				}
-				progressBar := RenderProgressBar(progressFraction*100.0, 14, ColorProgressFilled) + fmt.Sprintf(" %3.0f%%", progressFraction*100.0)
 
-				row := fmt.Sprintf("%-20s %s %s (%s / %s)",
-					t.FileName, progressBar, statusStr, formatSize(t.Downloaded), formatSize(t.TotalSize),
-				)
+				progressBar := RenderGradientBar(progressPct, barWidth, startHex, endHex)
 
+				speedStr := ""
+				if t.Status == model.StatusDownloading {
+					if t.SpeedKBps >= 1024.0 {
+						speedStr = fmt.Sprintf("%.2f MB/s", t.SpeedKBps/1024.0)
+					} else {
+						speedStr = fmt.Sprintf("%.1f KB/s", t.SpeedKBps)
+					}
+				}
+
+				etaStr := ""
+				if t.Status == model.StatusDownloading && t.SpeedKBps > 0 && t.TotalSize > t.Downloaded {
+					remBytes := t.TotalSize - t.Downloaded
+					remSecs := float64(remBytes) / (t.SpeedKBps * 1024.0)
+					if remSecs < 60 {
+						etaStr = fmt.Sprintf("ETA: %ds", int(remSecs))
+					} else if remSecs < 3600 {
+						etaStr = fmt.Sprintf("ETA: %dm %ds", int(remSecs)/60, int(remSecs)%60)
+					} else {
+						etaStr = fmt.Sprintf("ETA: %dh %dm", int(remSecs)/3600, (int(remSecs)%3600)/60)
+					}
+				}
+
+				sizeStr := fmt.Sprintf("%s / %s", formatSize(t.Downloaded), formatSize(t.TotalSize))
+
+				nameColWidth := 20
+				if width > 120 {
+					nameColWidth = 26
+				}
+				fileNameTrunc := TruncateVisual(t.FileName, nameColWidth, "...")
+
+				var row strings.Builder
+				prefix := "  "
 				if m.focus == FocusQueue && idx == m.selectedTaskIdx {
-					queueSb.WriteString(StyleSelectedListItem.Width(width - 8).Render(row) + "\n")
+					prefix = "> "
+				}
+				row.WriteString(prefix)
+				row.WriteString(fmt.Sprintf("%-*s %s  %3.0f%% [%s]  %-16s",
+					nameColWidth,
+					fileNameTrunc,
+					statusStr,
+					progressPct,
+					progressBar,
+					sizeStr,
+				))
+
+				if speedStr != "" {
+					row.WriteString("  " + lipgloss.NewStyle().Foreground(ColorSecondary).Render(speedStr))
+				}
+				if etaStr != "" {
+					row.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextMuted).Render(etaStr))
+				}
+				if t.Status == model.StatusFailed && t.Error != nil {
+					row.WriteString("  " + lipgloss.NewStyle().Foreground(ColorDanger).Render(fmt.Sprintf("(%v)", t.Error)))
+				}
+
+				renderedRow := row.String()
+				if m.focus == FocusQueue && idx == m.selectedTaskIdx {
+					rowWidth := width - 8
+					if rowWidth < 20 {
+						rowWidth = 20
+					}
+					queueSb.WriteString(StyleSelectedListItem.Width(rowWidth).Render(renderedRow) + "\n")
 				} else {
-					queueSb.WriteString(row + "\n")
+					queueSb.WriteString(renderedRow + "\n")
 				}
 			}
 		}
 	}
 
-	panelBorderQueue := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorBorder).
-		Width(width - 6).
-		Height(queueHeight)
-	if m.focus == FocusQueue || m.focus == FocusFileList {
-		panelBorderQueue = panelBorderQueue.BorderForeground(ColorPrimary)
-	}
-
-	sb.WriteString("  " + panelBorderQueue.Render(queueSb.String()) + "\n\n")
-
-	// Help instructions
+	// Help Instructions
 	var helpKeys []string
 	if m.focus == FocusFileList {
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Move Selection", StyleHelpKey.Render("[Up/Down/j/k]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Download", StyleHelpKey.Render("[Enter]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")))
 	} else {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Navigation", StyleHelpKey.Render("[Tab/Shift-Tab]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Focus Next", StyleHelpKey.Render("[Tab]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Focus Prev", StyleHelpKey.Render("[Shift+Tab]")))
 		if m.focus == FocusURL || m.focus == FocusFilename {
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Start Download", StyleHelpKey.Render("[Enter]")))
+			helpKeys = append(helpKeys, fmt.Sprintf("%s Paste", StyleHelpKey.Render("[Ctrl+V]")))
 		} else if m.focus == FocusQueue {
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Pause/Resume", StyleHelpKey.Render("[P]")))
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Cancel/Remove", StyleHelpKey.Render("[C]")))
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Clear Finished", StyleHelpKey.Render("[X]")))
+			helpKeys = append(helpKeys, fmt.Sprintf("%s Quick-Pick", StyleHelpKey.Render("[1-4]")))
 		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Return to Browser", StyleHelpKey.Render("[Esc]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Back to Browser", StyleHelpKey.Render("[Esc]")))
 	}
 
-	sb.WriteString("  " + strings.Join(helpKeys, "  ") + "\n")
+	helpView := "  " + strings.Join(helpKeys, "  ")
 
-	if m.focus != FocusFileList && len(m.queue.GetTasks()) > 0 {
-		sb.WriteString("\n  " + StyleHelp.Render("Tip: Press [Tab] to focus the queue, use [Up/Down/j/k] to select a task, [P] to Pause/Resume, [C] to Cancel/Remove, and [X] to Clear Finished.") + "\n")
-	}
+	topCard := SurfaceCard("Direct Model Download", inputSb.String(), width, m.focus == FocusURL || m.focus == FocusFilename, "HuggingFace / Direct")
+	middleCard := SurfaceCard("Curated Model Quick-Picks", qpSb.String(), width, false, "Popular")
+	bottomCard := SurfaceCard("Download Queue & Progress", queueSb.String(), width, m.focus == FocusQueue || m.focus == FocusFileList, fmt.Sprintf("%d active", len(m.queue.GetTasks())))
 
-	boxWidth := width - 4
-	if boxWidth < 50 {
-		boxWidth = 50
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Width(boxWidth).
-		Render(sb.String())
+	return lipgloss.JoinVertical(lipgloss.Left,
+		"",
+		topCard,
+		"",
+		middleCard,
+		"",
+		bottomCard,
+		"",
+		helpView,
+	)
 }
 
 type hfResolveMsg struct {

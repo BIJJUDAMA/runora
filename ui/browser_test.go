@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1642,10 +1643,330 @@ func TestGlobalHeaderRendering(t *testing.T) {
 	}
 }
 
+func TestBentoDownloaderLayout(t *testing.T) {
+	cfg := config.DefaultConfig()
+	q := model.NewDownloadQueue(t.TempDir(), "")
+	dm := NewDownloaderModel(cfg, q)
 
+	width := 120
+	height := 36
 
+	// 1. Initial empty queue view
+	view := dm.View(width, height)
 
+	// Verify Top Card
+	if !strings.Contains(view, "Direct Model Download") {
+		t.Errorf("expected view to contain 'Direct Model Download', got:\n%s", view)
+	}
+	if !strings.Contains(view, "HuggingFace / Direct") {
+		t.Errorf("expected view to contain badge 'HuggingFace / Direct', got:\n%s", view)
+	}
 
+	// Verify Middle Card (Curated Quick-Picks)
+	if !strings.Contains(view, "Curated Model Quick-Picks") {
+		t.Errorf("expected view to contain 'Curated Model Quick-Picks', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Popular") {
+		t.Errorf("expected view to contain badge 'Popular', got:\n%s", view)
+	}
 
+	// Verify Curated Models & Sizes
+	expectedCurated := []struct {
+		name string
+		size string
+	}{
+		{"1. Llama 3.1 8B Instruct (Q4_K_M)", "4.9 GB"},
+		{"2. Qwen 2.5 7B Instruct (Q4_K_M)", "4.7 GB"},
+		{"3. DeepSeek Coder 6.7B (Q4_K_M)", "4.1 GB"},
+		{"4. Mistral Nemo 12B (Q4_K_M)", "7.5 GB"},
+	}
 
+	for _, cur := range expectedCurated {
+		if !strings.Contains(view, cur.name) {
+			t.Errorf("expected view to contain curated model %q", cur.name)
+		}
+		if !strings.Contains(view, cur.size) {
+			t.Errorf("expected view to contain size %q for %q", cur.size, cur.name)
+		}
+	}
 
+	// Verify Bottom Card (Download Queue)
+	if !strings.Contains(view, "Download Queue & Progress") {
+		t.Errorf("expected view to contain 'Download Queue & Progress', got:\n%s", view)
+	}
+	if !strings.Contains(view, "0 active") {
+		t.Errorf("expected view to contain '0 active', got:\n%s", view)
+	}
+
+	// 2. Add an active downloading task and test gradient progress bar
+	task := q.AddTask("Llama-3.1-8B-Q4_K_M", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", 4900000000, "http://example.com/llama3.1.gguf")
+	// Set progress & speed
+	task.Downloaded = 2450000000 // 50%
+	task.Status = model.StatusDownloading
+	task.SpeedKBps = 2500.0 // 2.44 MB/s
+
+	viewDownloading := dm.View(width, height)
+	if !strings.Contains(viewDownloading, "1 active") {
+		t.Errorf("expected view to contain '1 active' badge when 1 task exists")
+	}
+	if !strings.Contains(viewDownloading, "[Downloading]") {
+		t.Errorf("expected view to contain status badge '[Downloading]'")
+	}
+	if !strings.Contains(viewDownloading, "50%") {
+		t.Errorf("expected view to contain progress percentage '50%%'")
+	}
+	// Verify gradient progress bar characters
+	if !strings.Contains(viewDownloading, "█") || !strings.Contains(viewDownloading, "░") {
+		t.Errorf("expected view to contain gradient progress bar characters '█' and '░'")
+	}
+	// Verify speed & ETA
+	if !strings.Contains(viewDownloading, "MB/s") && !strings.Contains(viewDownloading, "KB/s") {
+		t.Errorf("expected view to contain download speed indicator")
+	}
+	if !strings.Contains(viewDownloading, "ETA:") {
+		t.Errorf("expected view to contain ETA indicator")
+	}
+
+	// 3. Add completed and failed tasks
+	taskCompleted := q.AddTask("Qwen-2.5", "qwen2.5.gguf", 1000, "http://example.com/qwen.gguf")
+	taskCompleted.Status = model.StatusCompleted
+	taskCompleted.Downloaded = 1000
+
+	_ = q.AddFailedTask("DeepSeek", "deepseek.gguf", fmt.Errorf("connection refused"))
+
+	viewMulti := dm.View(width, height)
+	if !strings.Contains(viewMulti, "[Completed]") {
+		t.Errorf("expected view to contain '[Completed]' badge")
+	}
+	if !strings.Contains(viewMulti, "[Failed]") {
+		t.Errorf("expected view to contain '[Failed]' badge")
+	}
+	if !strings.Contains(viewMulti, "connection refused") && !strings.Contains(viewMulti, "connection") {
+		t.Errorf("expected view to contain error message 'connection refused'")
+	}
+
+	// 4. Test quick-pick key handling in FocusQueue
+	dm.focus = FocusQueue
+	dm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	tasks := q.GetTasks()
+	foundQwen := false
+	for _, t := range tasks {
+		if strings.Contains(t.FileName, "qwen2.5-7b-instruct-q4_k_m.gguf") {
+			foundQwen = true
+			break
+		}
+	}
+	if !foundQwen {
+		t.Errorf("expected quick-pick '2' to enqueue Qwen 2.5 model")
+	}
+
+	// 5. Assert strict ZERO emojis
+	assertZeroEmojis := func(stateName string, content string) {
+		for _, r := range content {
+			if (r >= 0x1F600 && r <= 0x1F64F) || // Emoticons
+				(r >= 0x1F300 && r <= 0x1F5FF) || // Misc Symbols and Pictographs
+				(r >= 0x1F680 && r <= 0x1F6FF) || // Transport and Map
+				(r >= 0x1F700 && r <= 0x1F77F) || // Alchemical Symbols
+				(r >= 0x1F780 && r <= 0x1F7FF) || // Geometric Shapes Extended
+				(r >= 0x1F800 && r <= 0x1F8FF) || // Supplemental Arrows-C
+				(r >= 0x1F900 && r <= 0x1F9FF) || // Supplemental Symbols and Pictographs
+				(r >= 0x1FA00 && r <= 0x1FA6F) || // Chess Symbols
+				(r >= 0x1FA70 && r <= 0x1FAFF) || // Symbols and Pictographs Extended-A
+				(r >= 0x2600 && r <= 0x26FF && r != 0x2605 && r != 0x2606) || // Misc symbols
+				(r >= 0x2700 && r <= 0x27BF && r != 0x2713 && r != 0x2717) { // Dingbats
+				t.Errorf("found emoji %q (code: %U) in state %s", r, r, stateName)
+			}
+		}
+	}
+
+	assertZeroEmojis("EmptyQueue", view)
+	assertZeroEmojis("Downloading", viewDownloading)
+	assertZeroEmojis("MultiTasks", viewMulti)
+}
+
+func TestBentoModelBrowserLayout(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+
+	// Mock hardware specs
+	bm.hardwareSpecs = &hardware.HardwareSpecs{
+		OS: "windows",
+		CPU: hardware.CPUSpecs{
+			Model:         "AMD Ryzen 9 7950X",
+			PhysicalCores: 16,
+			Threads:       32,
+		},
+		RAM: hardware.RAMSpecs{
+			Total:     64 * 1024 * 1024 * 1024,
+			Available: 48 * 1024 * 1024 * 1024,
+		},
+		GPU: hardware.GPUSpecs{
+			Name: "NVIDIA GeForce RTX 4090",
+			VRAM: 24 * 1024 * 1024 * 1024,
+		},
+		IsUnified: false,
+	}
+
+	// Mock GGUF models
+	bm.models = []*model.GGUFMetadata{
+		{
+			ID:            "llama-3-8b",
+			Name:          "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+			Architecture:  "llama",
+			Quantization:  "Q4_K_M",
+			ContextLength: 8192,
+			ParamCount:    8_000_000_000,
+			FileSize:      4_920_000_000,
+			FilePath:      "models/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+			Runtime:       "llama-server",
+			Task:          "chat",
+			ShardCount:    1,
+			Layers:        32,
+			Heads:         32,
+			HeadsKV:       8,
+		},
+		{
+			ID:            "qwen-2.5-72b",
+			Name:          "Qwen2.5-72B-Instruct.Q4_K_M.gguf",
+			Architecture:  "qwen2",
+			Quantization:  "Q4_K_M",
+			ContextLength: 32768,
+			ParamCount:    72_000_000_000,
+			FileSize:      45_000_000_000,
+			FilePath:      "models/Qwen2.5-72B-Instruct.Q4_K_M.gguf",
+			Runtime:       "llama-server",
+			Task:          "chat",
+			ShardCount:    3,
+			Layers:        80,
+			Heads:         64,
+			HeadsKV:       8,
+		},
+	}
+	bm.filterModels()
+	bm.rebuildSidebar()
+
+	// Find the index of the first model item in sidebar
+	firstModelSidebarIdx := -1
+	secondModelSidebarIdx := -1
+	for idx, item := range bm.sidebarItems {
+		if item.Type == ItemModelEntry {
+			if firstModelSidebarIdx == -1 {
+				firstModelSidebarIdx = idx
+			} else if secondModelSidebarIdx == -1 {
+				secondModelSidebarIdx = idx
+			}
+		}
+	}
+	if firstModelSidebarIdx == -1 || secondModelSidebarIdx == -1 {
+		t.Fatalf("failed to find model entries in sidebar")
+	}
+
+	bm.selected = firstModelSidebarIdx
+	view := bm.modelBrowserView(120, 30)
+
+	// 1. Assert Left Column SurfaceCard ("Models") and count badge
+	if !strings.Contains(view, "Models") {
+		t.Errorf("expected view to contain Left Bento Card title 'Models', got:\n%s", view)
+	}
+	if !strings.Contains(view, "2 models") {
+		t.Errorf("expected view to contain model count badge '2 models', got:\n%s", view)
+	}
+
+	// 2. Assert Right Column Bento Cards
+	// Card A: Model Details
+	if !strings.Contains(view, "Model Details") {
+		t.Errorf("expected view to contain Bento Card 'Model Details', got:\n%s", view)
+	}
+	if !strings.Contains(view, "llama") {
+		t.Errorf("expected view to contain architecture badge 'llama', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Architecture:") {
+		t.Errorf("expected view to contain 'Architecture:' label")
+	}
+	if !strings.Contains(view, "Quantization:") {
+		t.Errorf("expected view to contain 'Quantization:' label")
+	}
+
+	// Card B: Hardware Fit
+	if !strings.Contains(view, "Hardware Fit") {
+		t.Errorf("expected view to contain Bento Card 'Hardware Fit', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Fits VRAM") {
+		t.Errorf("expected view to contain hardware suitability badge 'Fits VRAM', got:\n%s", view)
+	}
+	if !strings.Contains(view, "GPU VRAM:") {
+		t.Errorf("expected view to contain 'GPU VRAM:' label")
+	}
+
+	// Card C: Parameters & Shards
+	if !strings.Contains(view, "Parameters & Shards") {
+		t.Errorf("expected view to contain Bento Card 'Parameters & Shards', got:\n%s", view)
+	}
+	if !strings.Contains(view, "1 shards") {
+		t.Errorf("expected view to contain shard badge '1 shards', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Param Count:") {
+		t.Errorf("expected view to contain 'Param Count:' label")
+	}
+	if !strings.Contains(view, "Context Length:") {
+		t.Errorf("expected view to contain 'Context Length:' label")
+	}
+
+	// 3. Test multi-shard model selection
+	bm.selected = secondModelSidebarIdx
+	viewMulti := bm.modelBrowserView(120, 30)
+
+	if !strings.Contains(viewMulti, "qwen2") {
+		t.Errorf("expected multi-shard view to contain architecture badge 'qwen2', got:\n%s", viewMulti)
+	}
+	if !strings.Contains(viewMulti, "3 shards") {
+		t.Errorf("expected multi-shard view to contain shard badge '3 shards', got:\n%s", viewMulti)
+	}
+
+	// 4. Test focusRight toggle
+	bm.focusRight = true
+	viewFocusRight := bm.modelBrowserView(120, 30)
+	if !strings.Contains(viewFocusRight, "Model Details") {
+		t.Errorf("expected focusRight view to render properly")
+	}
+
+	// 5. Test empty models
+	bmEmpty := NewBrowserModel(cfg, srv)
+	bmEmpty.loading = false
+	bmEmpty.models = nil
+	bmEmpty.filterModels()
+	bmEmpty.rebuildSidebar()
+	viewEmpty := bmEmpty.modelBrowserView(120, 30)
+	if !strings.Contains(viewEmpty, "0 models") {
+		t.Errorf("expected empty browser view to contain '0 models', got:\n%s", viewEmpty)
+	}
+	if !strings.Contains(viewEmpty, "No models found.") {
+		t.Errorf("expected empty browser view to contain 'No models found.', got:\n%s", viewEmpty)
+	}
+
+	// 6. Assert strict ZERO emojis
+	assertZeroEmojis := func(stateName string, content string) {
+		for _, r := range content {
+			if (r >= 0x1F600 && r <= 0x1F64F) || // Emoticons
+				(r >= 0x1F300 && r <= 0x1F5FF) || // Misc Symbols and Pictographs
+				(r >= 0x1F680 && r <= 0x1F6FF) || // Transport and Map
+				(r >= 0x1F700 && r <= 0x1F77F) || // Alchemical Symbols
+				(r >= 0x1F780 && r <= 0x1F7FF) || // Geometric Shapes Extended
+				(r >= 0x1F800 && r <= 0x1F8FF) || // Supplemental Arrows-C
+				(r >= 0x1F900 && r <= 0x1F9FF) || // Supplemental Symbols and Pictographs
+				(r >= 0x1FA00 && r <= 0x1FA6F) || // Chess Symbols
+				(r >= 0x1FA70 && r <= 0x1FAFF) || // Symbols and Pictographs Extended-A
+				(r >= 0x2600 && r <= 0x26FF && r != 0x2605 && r != 0x2606) || // Misc symbols
+				(r >= 0x2700 && r <= 0x27BF && r != 0x2713 && r != 0x2717) { // Dingbats
+				t.Errorf("found emoji %q (code: %U) in state %s", r, r, stateName)
+			}
+		}
+	}
+
+	assertZeroEmojis("SingleShard", view)
+	assertZeroEmojis("MultiShard", viewMulti)
+	assertZeroEmojis("FocusRight", viewFocusRight)
+	assertZeroEmojis("EmptyModels", viewEmpty)
+}
