@@ -881,7 +881,9 @@ func (m *LifecycleModel) View(width int, height int) string {
 	}
 	leftSB.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  [↑/↓: Select Section]"))
 	leftContent := strings.TrimRight(leftSB.String(), "\n")
-	leftCard := SurfaceCard("Components", leftContent, leftWidth, true, "4 Sections")
+
+	cardHeight := max(15, height-3)
+	leftCard := SurfaceCardWithHeight("Components", leftContent, leftWidth, cardHeight, true, "4 Sections")
 
 	// 2. Right Column: Dynamic Section Inspector
 	var rightCard string
@@ -920,7 +922,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 			tokenSB.WriteString(fmt.Sprintf("  Actions: Press %s to edit GitHub Token, %s to edit Hugging Face Token\n", StyleHelpKey.Render("[G]"), StyleHelpKey.Render("[T]")))
 		}
 		tokenContent := strings.TrimRight(tokenSB.String(), "\n")
-		rightCard = SurfaceCard("API Credentials Inspector", tokenContent, rightWidth, m.tokenEditActive, "GitHub & Hugging Face")
+		rightCard = SurfaceCardWithHeight("API Credentials Inspector", tokenContent, rightWidth, cardHeight, true, "GitHub & Hugging Face")
 
 	} else if m.SelectedRuntime == 1 {
 		// llama.cpp Runtime Inspector
@@ -986,7 +988,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		llamaSB.WriteString(fmt.Sprintf("  %-22s %s\n\n", "Backup & Recovery:", llamaBackupStr))
 		llamaSB.WriteString(fmt.Sprintf("  Actions: %s Check & Install Update  │  %s Rollback Backup\n", StyleHelpKey.Render("[Enter/U]"), StyleHelpKey.Render("[R]")))
 		llamaContent := strings.TrimRight(llamaSB.String(), "\n")
-		rightCard = SurfaceCard("llama.cpp Runtime Inspector", llamaContent, rightWidth, true, "llama.cpp")
+		rightCard = SurfaceCardWithHeight("llama.cpp Runtime Inspector", llamaContent, rightWidth, cardHeight, true, "llama.cpp")
 
 	} else if m.SelectedRuntime == 2 {
 		// ONNX Runtime Inspector
@@ -1027,7 +1029,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		onnxSB.WriteString(fmt.Sprintf("  %-22s %s\n\n", "Backup & Recovery:", onnxBackupStr))
 		onnxSB.WriteString(fmt.Sprintf("  Actions: %s Install/Update ONNX  │  %s Rollback Backup\n", StyleHelpKey.Render("[Enter/O]"), StyleHelpKey.Render("[R]")))
 		onnxContent := strings.TrimRight(onnxSB.String(), "\n")
-		rightCard = SurfaceCard("ONNX Runtime Inspector", onnxContent, rightWidth, true, "ONNX")
+		rightCard = SurfaceCardWithHeight("ONNX Runtime Inspector", onnxContent, rightWidth, cardHeight, true, "ONNX")
 
 	} else {
 		// Runora App & Tools Inspector
@@ -1057,7 +1059,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		appSB.WriteString(fmt.Sprintf("  %-22s %s\n\n", "Onboarding Tour:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[N: Re-run Welcome Tour]")))
 		appSB.WriteString(fmt.Sprintf("  Actions: %s Self-Update App  │  %s Themes  │  %s Welcome Tour\n", StyleHelpKey.Render("[Enter/A]"), StyleHelpKey.Render("[Y]"), StyleHelpKey.Render("[N]")))
 		appContent := strings.TrimRight(appSB.String(), "\n")
-		rightCard = SurfaceCard("Runora System & Tools Inspector", appContent, rightWidth, true, "System")
+		rightCard = SurfaceCardWithHeight("Runora System & Tools Inspector", appContent, rightWidth, cardHeight, true, "System")
 	}
 
 	// Join Left & Right Columns side by side

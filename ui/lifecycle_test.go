@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/hardware"
 )
@@ -39,6 +40,9 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 
 	// 1. Standard Settings 2-Panel Inspector Layout View (Section 0: API Credentials)
 	view := model.View(100, 40)
+	if h := lipgloss.Height(view); h != 37 {
+		t.Errorf("expected view height to match cardHeight 37 (40-3), got %d", h)
+	}
 
 	// Verify Components list and API Credentials inspector are present
 	if !strings.Contains(view, "Components") {
@@ -72,6 +76,9 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	// 3. Switch to Section 1 (llama.cpp Runtime Inspector)
 	model.SelectedRuntime = 1
 	llamaView := model.View(100, 40)
+	if h := lipgloss.Height(llamaView); h != 37 {
+		t.Errorf("expected llamaView height to match cardHeight 37, got %d", h)
+	}
 	if !strings.Contains(llamaView, "llama.cpp Runtime Inspector") {
 		t.Errorf("expected view to contain 'llama.cpp Runtime Inspector', got:\n%s", llamaView)
 	}
@@ -94,6 +101,9 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	// 4. Switch to Section 2 (ONNX Runtime Inspector)
 	model.SelectedRuntime = 2
 	onnxView := model.View(100, 40)
+	if h := lipgloss.Height(onnxView); h != 37 {
+		t.Errorf("expected onnxView height to match cardHeight 37, got %d", h)
+	}
 	if !strings.Contains(onnxView, "ONNX Runtime Inspector") {
 		t.Errorf("expected view to contain 'ONNX Runtime Inspector', got:\n%s", onnxView)
 	}
@@ -104,6 +114,9 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	// 5. Switch to Section 3 (Runora System & Tools Inspector)
 	model.SelectedRuntime = 3
 	appView := model.View(100, 40)
+	if h := lipgloss.Height(appView); h != 37 {
+		t.Errorf("expected appView height to match cardHeight 37, got %d", h)
+	}
 	if !strings.Contains(appView, "Runora System & Tools Inspector") {
 		t.Errorf("expected view to contain 'Runora System & Tools Inspector', got:\n%s", appView)
 	}
@@ -119,6 +132,9 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 		t.Fatalf("expected tokenEditActive to be true after pressing 'g'")
 	}
 	editView := model.View(100, 40)
+	if h := lipgloss.Height(editView); h != 37 {
+		t.Errorf("expected editView height to match cardHeight 37, got %d", h)
+	}
 
 	if !strings.Contains(editView, "API Credentials Inspector") {
 		t.Errorf("expected edit view to maintain API Credentials card, got:\n%s", editView)

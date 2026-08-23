@@ -771,8 +771,8 @@ func RenderGradientBar(pct float64, width int, startHex, endHex string) string {
 	return sb.String()
 }
 
-// SurfaceCard renders a standardized Bento card surface with rounded borders, title, badge, and dynamic active border.
-func SurfaceCard(title string, content string, width int, active bool, badge string) string {
+// SurfaceCardWithHeight renders a standardized Bento card surface with explicit width and height, centering content vertically when height > 0.
+func SurfaceCardWithHeight(title string, content string, width int, height int, active bool, badge string) string {
 	borderColor := ColorBorder
 	if borderColor == nil {
 		borderColor = lipgloss.Color("#3C3C3C")
@@ -830,6 +830,49 @@ func SurfaceCard(title string, content string, width int, active bool, badge str
 		}
 	}
 
+	if height > 2 {
+		innerHeight := height - 2
+		cardStyle = cardStyle.Height(innerHeight)
+
+		contentLines := 0
+		if content != "" {
+			if innerWidth > 0 {
+				contentLines = lipgloss.Height(lipgloss.NewStyle().Width(innerWidth).Render(content))
+			} else {
+				contentLines = len(strings.Split(content, "\n"))
+			}
+		}
+		headerLines := 0
+		if headerLine != "" {
+			if innerWidth > 0 {
+				headerLines = lipgloss.Height(lipgloss.NewStyle().Width(innerWidth).Render(headerLine))
+			} else {
+				headerLines = 1
+			}
+		}
+
+		usedLines := headerLines + contentLines
+		remainingLines := innerHeight - usedLines
+		if remainingLines > 0 {
+			topPad := remainingLines / 2
+			bottomPad := remainingLines - topPad
+			var sb strings.Builder
+			if headerLine != "" {
+				sb.WriteString(headerLine + "\n")
+			}
+			if topPad > 0 {
+				sb.WriteString(strings.Repeat("\n", topPad))
+			}
+			if content != "" {
+				sb.WriteString(content)
+			}
+			if bottomPad > 0 {
+				sb.WriteString(strings.Repeat("\n", bottomPad))
+			}
+			return cardStyle.Render(sb.String())
+		}
+	}
+
 	var cardBody string
 	if headerLine != "" && content != "" {
 		cardBody = headerLine + "\n" + content
@@ -840,6 +883,11 @@ func SurfaceCard(title string, content string, width int, active bool, badge str
 	}
 
 	return cardStyle.Render(cardBody)
+}
+
+// SurfaceCard renders a standardized Bento card surface with auto height.
+func SurfaceCard(title string, content string, width int, active bool, badge string) string {
+	return SurfaceCardWithHeight(title, content, width, 0, active, badge)
 }
 
 // GlobalTabHeader renders the standardized top navigation bar across all screens.
