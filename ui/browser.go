@@ -41,6 +41,7 @@ const (
 	ScreenSettings
 	ScreenDownloader
 	ScreenProfileCreator
+	ScreenLogStreamer
 )
 
 type OnboardingStep int
@@ -98,11 +99,15 @@ type BrowserModel struct {
 	downloadQueue       *model.DownloadQueue
 	lifecycleModel      *LifecycleModel
 	profileCreatorModel   *ProfileCreatorModel
+	logStreamerModel      *LogStreamerModel
 	onboardingActive      bool
 	onboardingStep        OnboardingStep
 	onboardingTokenInput  textinput.Model
 	focusRight            bool
 	llamaCPPMissingActive bool
+	toasts                *ToastManager
+	themePicker           *ThemePickerModel
+	themePickerActive     bool
 }
 
 func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel {
@@ -150,7 +155,7 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 		serverUIStatus:        UIStatusStopped,
 		screenMode:            ScreenBrowser,
 		sidebarItems:          []SidebarItem{},
-		monitorModel:          NewMonitorModel(srv),
+		monitorModel:          NewMonitorModelWithConfig(srv, cfg, nil),
 		lifecycleModel:        NewLifecycleModel(cfg, srv),
 		downloadQueue:         q,
 		downloaderModel:       NewDownloaderModel(cfg, q),
@@ -158,6 +163,7 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 		onboardingStep:        StepWelcome,
 		onboardingTokenInput:  tokenTi,
 		llamaCPPMissingActive: llamaCPPMissing && flag.Lookup("test.v") == nil,
+		toasts:                NewToastManager(),
 	}
 }
 
@@ -175,9 +181,9 @@ type discoverMsg struct {
 	err    error
 }
 
-func discoverCmd(modelsDir string) tea.Cmd {
+func discoverCmd(modelsDirs ...string) tea.Cmd {
 	return func() tea.Msg {
-		models, err := model.DiscoverModels(modelsDir)
+		models, err := model.DiscoverModels(modelsDirs...)
 		return discoverMsg{models: models, err: err}
 	}
 }
@@ -329,7 +335,7 @@ func tickCmd() tea.Cmd {
 
 func (m *BrowserModel) Init() tea.Cmd {
 	return tea.Batch(
-		discoverCmd(m.config.Paths.Models),
+		discoverCmd(m.config.Paths.AllModelDirectories()...),
 		m.loadProfilesCmd(),
 		detectHardwareCmd,
 		tickCmd(),
@@ -448,6 +454,45 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.themePickerActive && m.themePicker != nil {
+		if _, isSizeMsg := msg.(tea.WindowSizeMsg); !isSizeMsg {
+			cmd, done, applied, themeID := m.themePicker.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if done {
+				m.themePickerActive = false
+				m.themePicker = nil
+				if applied {
+					m.config.Theme = themeID
+					_ = m.config.Save()
+					ApplyTheme(themeID)
+					if m.toasts != nil {
+						cmds = append(cmds, m.toasts.ShowSuccess(fmt.Sprintf("Theme: %s applied", ActiveTheme.Name())))
+					}
+				} else {
+					ApplyTheme(m.config.Theme)
+				}
+			}
+			return m, tea.Batch(cmds...)
+		}
+	}
+
+	if m.screenMode == ScreenLogStreamer && m.logStreamerModel != nil {
+		if _, isSizeMsg := msg.(tea.WindowSizeMsg); !isSizeMsg {
+			var cmd tea.Cmd
+			m.logStreamerModel, cmd = m.logStreamerModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if m.logStreamerModel.Closed() {
+				m.screenMode = m.logStreamerModel.PrevScreen()
+				m.logStreamerModel = nil
+			}
+			return m, tea.Batch(cmds...)
+		}
+	}
+
 	if m.screenMode == ScreenProfileCreator && m.profileCreatorModel != nil {
 		if _, isSizeMsg := msg.(tea.WindowSizeMsg); !isSizeMsg {
 			cmd, done, saved := m.profileCreatorModel.Update(msg)
@@ -456,6 +501,10 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if done {
 				m.screenMode = ScreenDashboard
+				savedProfileName := ""
+				if m.profileCreatorModel != nil {
+					savedProfileName = m.profileCreatorModel.nameInput.Value()
+				}
 				m.profileCreatorModel = nil
 				if saved {
 					// Reload profiles from config paths
@@ -465,8 +514,15 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// Re-initialize dashboard with the newly added profile selected
 						if m.dashboard != nil {
 							m.dashboard.Profiles = profs
-							// Select the newly added profile (which is the last one)
-							m.dashboard.ActiveIdx = len(profs) - 1
+							foundIdx := len(profs) - 1
+							for i, p := range profs {
+								if p.Name == savedProfileName {
+									foundIdx = i
+									break
+								}
+							}
+							m.dashboard.ActiveIdx = foundIdx
+							m.dashboard.SetToast("✓ Profile saved successfully!")
 						}
 					}
 				}
@@ -479,6 +535,11 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+	case ToastExpireMsg:
+		if m.toasts != nil {
+			m.toasts.Update(msg)
+		}
 
 	case discoverMsg:
 		m.loading = false
@@ -512,7 +573,33 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case profilesMsg:
 		if msg.err == nil {
 			m.profiles = msg.profiles
+			if m.monitorModel != nil {
+				m.monitorModel.SetProfiles(msg.profiles)
+			}
 			m.rebuildSidebar()
+		}
+
+	case OpenLogStreamerMsg:
+		m.logStreamerModel = NewLogStreamerModel(m.srvRunner, msg.PrevScreen, msg.Port)
+		m.screenMode = ScreenLogStreamer
+		cmds = append(cmds, m.logStreamerModel.Init())
+
+	case LogStreamTickMsg:
+		if m.screenMode == ScreenLogStreamer && m.logStreamerModel != nil {
+			var cmd tea.Cmd
+			m.logStreamerModel, cmd = m.logStreamerModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case LogStreamDataMsg:
+		if m.logStreamerModel != nil {
+			var cmd tea.Cmd
+			m.logStreamerModel, cmd = m.logStreamerModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 
 	case downloadQueueMsg:
@@ -523,7 +610,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.task != nil && msg.task.Status == model.StatusCompleted {
-			cmds = append(cmds, discoverCmd(m.config.Paths.Models))
+			cmds = append(cmds, discoverCmd(m.config.Paths.AllModelDirectories()...))
 		}
 		cmds = append(cmds, m.readDownloadQueueChan())
 
@@ -618,6 +705,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
+		if m.toasts != nil {
+			m.toasts.PruneExpired()
+		}
 		status, runModel, port := m.srvRunner.GetStatus()
 		m.runningModelPath = runModel
 
@@ -642,11 +732,56 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dashboard.CycleProfile(-1)
 			case "right", "l":
 				m.dashboard.CycleProfile(1)
-			case "esc", "c", "C":
+			case "esc":
 				m.screenMode = ScreenBrowser
+			case "c", "C":
+				_ = m.dashboard.CopyCommandToClipboard()
+				if m.toasts != nil {
+					cmds = append(cmds, m.toasts.ShowSuccess("Command copied to clipboard!"))
+				}
 			case "p", "P":
 				m.profileCreatorModel = NewProfileCreatorModel(m.config.Paths.Profiles)
 				m.screenMode = ScreenProfileCreator
+			case "e", "E":
+				p := m.dashboard.ActiveProfile()
+				if p != nil {
+					m.profileCreatorModel = NewProfileEditorModel(m.config.Paths.Profiles, p, false)
+					m.screenMode = ScreenProfileCreator
+				}
+			case "n", "N":
+				p := m.dashboard.ActiveProfile()
+				if p != nil {
+					m.profileCreatorModel = NewProfileEditorModel(m.config.Paths.Profiles, p, true)
+					m.screenMode = ScreenProfileCreator
+				}
+			case "d", "D":
+				p := m.dashboard.ActiveProfile()
+				if p != nil {
+					if profile.IsDefaultProfile(p.Name) {
+						m.dashboard.SetToast("Cannot delete built-in default profile: " + p.Name)
+						if m.toasts != nil {
+							cmds = append(cmds, m.toasts.ShowWarning("Cannot delete default profile"))
+						}
+					} else {
+						if err := profile.DeleteProfile(m.config.Paths.Profiles, p.Name); err != nil {
+							m.dashboard.SetToast(fmt.Sprintf("Failed to delete profile: %v", err))
+							if m.toasts != nil {
+								cmds = append(cmds, m.toasts.ShowDanger("Failed to delete profile"))
+							}
+						} else {
+							profs, _ := profile.LoadAll(m.config.Paths.Profiles)
+							m.profiles = profs
+							m.dashboard.Profiles = profs
+							if m.dashboard.ActiveIdx >= len(profs) {
+								m.dashboard.ActiveIdx = max(0, len(profs)-1)
+							}
+							m.dashboard.SetToast(fmt.Sprintf("✓ Deleted custom profile '%s'", p.Name))
+							if m.toasts != nil {
+								cmds = append(cmds, m.toasts.ShowSuccess(fmt.Sprintf("Deleted profile '%s'", p.Name)))
+							}
+						}
+					}
+				}
 			case "enter", "y", "Y":
 				p := m.dashboard.ActiveProfile()
 				if p != nil {
@@ -716,6 +851,14 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "c", "C":
 				m.screenMode = ScreenBrowser
 				m.rebuildSidebar()
+			case "l", "L":
+				var targetPort int
+				if len(m.monitorModel.instances) > 0 && m.monitorModel.selected >= 0 && m.monitorModel.selected < len(m.monitorModel.instances) {
+					targetPort = m.monitorModel.instances[m.monitorModel.selected].Port
+				}
+				m.logStreamerModel = NewLogStreamerModel(m.srvRunner, ScreenServerMonitor, targetPort)
+				m.screenMode = ScreenLogStreamer
+				cmds = append(cmds, m.logStreamerModel.Init())
 			default:
 				cmd := m.monitorModel.Update(msg)
 				if cmd != nil {
@@ -773,19 +916,23 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
 					}
 				case "y", "Y":
-					newTheme := NextThemeName(m.config.Theme)
-					m.config.Theme = newTheme
-					_ = m.config.Save()
-					ApplyTheme(newTheme)
-				case "t", "T", "g", "G":
+					m.themePicker = NewThemePickerModel(m.config.Theme)
+					m.themePickerActive = true
+				case "s", "S", "b", "B", "t", "T", "g", "G":
 					_, cmd := m.lifecycleModel.Update(msg)
 					if cmd != nil {
 						cmds = append(cmds, cmd)
 					}
 				case "v", "V":
-					if !m.lifecycleModel.appChecking {
-						m.lifecycleModel.SelectedRuntime = 2
-						cmds = append(cmds, m.lifecycleModel.StartAppCheck())
+					if m.lifecycleModel.SelectedRuntime == 2 {
+						if !m.lifecycleModel.appChecking {
+							cmds = append(cmds, m.lifecycleModel.StartAppCheck())
+						}
+					} else {
+						_, cmd := m.lifecycleModel.Update(msg)
+						if cmd != nil {
+							cmds = append(cmds, cmd)
+						}
 					}
 				case "a", "A":
 					if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
@@ -846,7 +993,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "tab", "shift+tab":
 				m.focusRight = !m.focusRight
 
-			case "right", "l":
+			case "right":
 				m.focusRight = true
 
 			case "left", "h":
@@ -878,11 +1025,17 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
+				if m.toasts != nil {
+					cmds = append(cmds, m.toasts.ShowWarning("Model server stopped"))
+				}
 
 			case "ctrl+s":
 				m.serverUIStatus = UIStatusStopped
 				m.serverErr = nil
 				_ = m.srvRunner.Stop()
+				if m.toasts != nil {
+					cmds = append(cmds, m.toasts.ShowWarning("All servers stopped"))
+				}
 
 			case "e", "E":
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
@@ -912,6 +1065,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.config.ModelTasks[selectedModel.FilePath] = nextTask
 						_ = m.config.Save()
 						m.rebuildSidebar()
+						if m.toasts != nil {
+							cmds = append(cmds, m.toasts.Show(fmt.Sprintf("Task set to: %s", nextTask)))
+						}
 					}
 				}
 
@@ -922,10 +1078,19 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.config.ToggleFavorite(item.ModelPath)
 						_ = m.config.Save()
 						m.rebuildSidebar()
+						if m.toasts != nil {
+							if m.config.IsFavorite(item.ModelPath) {
+								cmds = append(cmds, m.toasts.ShowSuccess(fmt.Sprintf("★ Added %s to favorites", m.models[item.ModelIdx].Name)))
+							} else {
+								cmds = append(cmds, m.toasts.Show(fmt.Sprintf("Removed %s from favorites", m.models[item.ModelIdx].Name)))
+							}
+						}
 					}
 				}
 
-
+			case "y", "Y":
+				m.themePicker = NewThemePickerModel(m.config.Theme)
+				m.themePickerActive = true
 
 			case "b", "B":
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
@@ -937,6 +1102,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = m.srvRunner.Stop()
 						m.serverUIStatus = UIStatusStopped
 						cmds = append(cmds, m.startBenchmark(selectedModel))
+						if m.toasts != nil {
+							cmds = append(cmds, m.toasts.Show(fmt.Sprintf("Benchmarking %s...", selectedModel.Name)))
+						}
 					}
 				}
 
@@ -950,6 +1118,29 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "m", "M":
 				m.screenMode = ScreenServerMonitor
 				cmds = append(cmds, m.monitorModel.PollMetricsCmd(), MonitorTickCmd())
+
+			case "l", "L":
+				var targetPort int
+				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
+					item := m.sidebarItems[m.selected]
+					if item.Type == ItemModelEntry {
+						for _, inst := range m.srvRunner.GetAllInstances() {
+							if inst.ModelPath == item.ModelPath {
+								targetPort = inst.Port
+								break
+							}
+						}
+					}
+				}
+				if targetPort == 0 {
+					instances := m.srvRunner.GetAllInstances()
+					if len(instances) > 0 {
+						targetPort = instances[0].Port
+					}
+				}
+				m.logStreamerModel = NewLogStreamerModel(m.srvRunner, ScreenBrowser, targetPort)
+				m.screenMode = ScreenLogStreamer
+				cmds = append(cmds, m.logStreamerModel.Init())
 
 			case "u", "U":
 				m.lifecycleModel.RefreshLocalVersion()
@@ -1154,7 +1345,12 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Quantization:", selectedModel.Quantization))
 	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Context Length:", fmt.Sprintf("%d tokens", selectedModel.ContextLength)))
 	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Param Count:", formatParams(selectedModel.ParamCount)))
-	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "File Size:", formatSize(selectedModel.FileSize)))
+	if selectedModel.ShardCount > 1 {
+		sb.WriteString(fmt.Sprintf("  %-16s %s (%d shards)\n", "File Size:", formatSize(selectedModel.FileSize), selectedModel.ShardCount))
+		sb.WriteString(fmt.Sprintf("  %-16s %d shards (multi-file GGUF)\n", "Shards:", selectedModel.ShardCount))
+	} else {
+		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "File Size:", formatSize(selectedModel.FileSize)))
+	}
 	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Runtime:", selectedModel.Runtime))
 	sb.WriteString(fmt.Sprintf("  %-16s %s (Press [E] to cycle)\n\n", "Task Type:", selectedModel.Task))
 
@@ -1299,96 +1495,157 @@ func (m *BrowserModel) rightPanelView(width int, height int) string {
 }
 
 func (m *BrowserModel) View() string {
+	var baseView string
+
 	if m.loading {
-		return "\n  Scanning models directory... Please wait."
-	}
-
-	if m.err != nil {
-		return fmt.Sprintf("\n  Error: %v\n  Press Q to quit.", m.err)
-	}
-
-	if m.screenMode == ScreenDashboard && m.dashboard != nil {
+		baseView = "\n  Scanning models directory... Please wait."
+	} else if m.err != nil {
+		baseView = fmt.Sprintf("\n  Error: %v\n  Press Q to quit.", m.err)
+	} else if m.onboardingActive {
+		onboardingOverlay := m.onboardingOverlayView(m.width, m.height)
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, onboardingOverlay)
+	} else if m.llamaCPPMissingActive {
+		missingOverlay := m.llamaCPPMissingOverlayView(m.width, m.height)
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, missingOverlay)
+	} else if m.screenMode == ScreenDashboard && m.dashboard != nil {
 		dashView := m.dashboard.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dashView)
-	}
-
-
-
-	if m.screenMode == ScreenBenchmarkProgress && m.benchmarkProgress != nil {
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dashView)
+	} else if m.screenMode == ScreenBenchmarkProgress && m.benchmarkProgress != nil {
 		progressView := m.benchmarkProgress.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, progressView)
-	}
-
-	if m.screenMode == ScreenPerformanceDashboard && m.perfDashboard != nil {
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, progressView)
+	} else if m.screenMode == ScreenPerformanceDashboard && m.perfDashboard != nil {
 		perfView := m.perfDashboard.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, perfView)
-	}
-
-	if m.screenMode == ScreenServerMonitor && m.monitorModel != nil {
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, perfView)
+	} else if m.screenMode == ScreenServerMonitor && m.monitorModel != nil {
 		monitorView := m.monitorModel.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, monitorView)
-	}
-
-	if m.screenMode == ScreenSettings && m.lifecycleModel != nil {
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, monitorView)
+	} else if m.screenMode == ScreenSettings && m.lifecycleModel != nil {
 		settingsView := m.lifecycleModel.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, settingsView)
-	}
-
-	if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, settingsView)
+	} else if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
 		downView := m.downloaderModel.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, downView)
-	}
-
-	if m.screenMode == ScreenProfileCreator && m.profileCreatorModel != nil {
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, downView)
+	} else if m.screenMode == ScreenProfileCreator && m.profileCreatorModel != nil {
 		creatorView := m.profileCreatorModel.View(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, creatorView)
-	}
-
-	totalWidth := m.width
-	if totalWidth < 60 {
-		totalWidth = 60
-	}
-	leftWidth := int(float64(totalWidth) * 0.40)
-	if leftWidth < 25 {
-		leftWidth = 25
-	}
-	rightWidth := totalWidth - leftWidth - 6
-
-	panelHeight := m.height - 6
-	if panelHeight < 10 {
-		panelHeight = 10
-	}
-
-	var leftSb strings.Builder
-	if len(m.sidebarItems) == 0 {
-		leftSb.WriteString("\n  No models found.")
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, creatorView)
+	} else if m.screenMode == ScreenLogStreamer && m.logStreamerModel != nil {
+		logView := m.logStreamerModel.View(m.width, m.height)
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, logView)
 	} else {
-		maxVisible := panelHeight - 2
-		if maxVisible < 1 {
-			maxVisible = 1
+		totalWidth := m.width
+		if totalWidth < 60 {
+			totalWidth = 60
 		}
-		if m.selected < m.scrollOffset {
-			m.scrollOffset = m.selected
-		} else if m.selected >= m.scrollOffset+maxVisible {
-			m.scrollOffset = m.selected - maxVisible + 1
+		leftWidth := int(float64(totalWidth) * 0.40)
+		if leftWidth < 25 {
+			leftWidth = 25
+		}
+		rightWidth := totalWidth - leftWidth - 6
+
+		panelHeight := m.height - 6
+		if panelHeight < 10 {
+			panelHeight = 10
 		}
 
-		end := m.scrollOffset + maxVisible
-		if end > len(m.sidebarItems) {
-			end = len(m.sidebarItems)
-		}
-
-		leftSb.WriteString("\n")
-		for idx := m.scrollOffset; idx < end; idx++ {
-			item := m.sidebarItems[idx]
-
-			if item.Type == ItemSectionHeader {
-				leftSb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf(" %s", item.Label)) + "\n")
-				continue
+		var leftSb strings.Builder
+		if len(m.sidebarItems) == 0 {
+			leftSb.WriteString("\n  No models found.")
+		} else {
+			maxVisible := panelHeight - 2
+			if maxVisible < 1 {
+				maxVisible = 1
+			}
+			if m.selected < m.scrollOffset {
+				m.scrollOffset = m.selected
+			} else if m.selected >= m.scrollOffset+maxVisible {
+				m.scrollOffset = m.selected - maxVisible + 1
 			}
 
-			if item.Type == ItemFolderHeader {
-				folderLabel := item.Label
+			end := m.scrollOffset + maxVisible
+			if end > len(m.sidebarItems) {
+				end = len(m.sidebarItems)
+			}
+
+			leftSb.WriteString("\n")
+			for idx := m.scrollOffset; idx < end; idx++ {
+				item := m.sidebarItems[idx]
+
+				if item.Type == ItemSectionHeader {
+					leftSb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf(" %s", item.Label)) + "\n")
+					continue
+				}
+
+				if item.Type == ItemFolderHeader {
+					folderLabel := item.Label
+					selWidth := leftWidth - 2
+					if selWidth < 10 {
+						selWidth = 10
+					}
+					if idx == m.selected {
+						leftSb.WriteString(
+							StyleSelectedListItem.Width(selWidth).Render(
+								fmt.Sprintf("  %s", folderLabel),
+							) + "\n",
+						)
+					} else {
+						leftSb.WriteString(
+							fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(folderLabel)),
+						)
+					}
+					continue
+				}
+
+				// Model item entry
+				mod := m.models[item.ModelIdx]
+
+				bullet := "●"
+				var bulletStyled string
+				if m.hardwareSpecs != nil {
+					est := hardware.EstimateMemory(mod, m.hardwareSpecs, 0)
+					switch est.Suitability {
+					case hardware.SuitabilityFitsVRAM:
+						bulletStyled = StyleSuccess.Render(bullet)
+					case hardware.SuitabilityPartialVRAM:
+						bulletStyled = StyleWarning.Render(bullet)
+					case hardware.SuitabilityFitsRAM:
+						bulletStyled = lipgloss.NewStyle().Foreground(ColorSecondary).Render(bullet)
+					case hardware.SuitabilityExceeds:
+						bulletStyled = StyleDanger.Render(bullet)
+					}
+				} else {
+					bulletStyled = StyleListItem.Render(bullet)
+				}
+
+				isRunningStr := ""
+				if m.isModelRunning(mod.FilePath) {
+					isRunningStr = "▶ "
+				}
+
+				rawName := item.Label
+				isFavorite := m.config.IsFavorite(mod.FilePath)
+
+				indent := ""
+				if strings.HasPrefix(rawName, "  ") {
+					indent = "  "
+					rawName = strings.TrimPrefix(rawName, "  ")
+				}
+
+				maxNameLen := leftWidth - 10
+				if isFavorite {
+					maxNameLen -= 2
+				}
+				if maxNameLen < 4 {
+					maxNameLen = 4
+				}
+				rawName = TruncateVisual(rawName, maxNameLen, "...")
+
+				var displayName string
+				if isFavorite {
+					displayName = indent + StyleStar.Render("★ ") + rawName
+				} else {
+					displayName = indent + rawName
+				}
+
 				selWidth := leftWidth - 2
 				if selWidth < 10 {
 					selWidth = 10
@@ -1396,160 +1653,95 @@ func (m *BrowserModel) View() string {
 				if idx == m.selected {
 					leftSb.WriteString(
 						StyleSelectedListItem.Width(selWidth).Render(
-							fmt.Sprintf("  %s", folderLabel),
+							fmt.Sprintf("%s%s %s", isRunningStr, bullet, displayName),
 						) + "\n",
 					)
 				} else {
 					leftSb.WriteString(
-						fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(folderLabel)),
+						fmt.Sprintf("  %s%s %s\n", isRunningStr, bulletStyled, StyleListItem.Render(displayName)),
 					)
 				}
-				continue
-			}
-
-			// Model item entry
-			mod := m.models[item.ModelIdx]
-
-			bullet := "●"
-			var bulletStyled string
-			if m.hardwareSpecs != nil {
-				est := hardware.EstimateMemory(mod, m.hardwareSpecs, 0)
-				switch est.Suitability {
-				case hardware.SuitabilityFitsVRAM:
-					bulletStyled = StyleSuccess.Render(bullet)
-				case hardware.SuitabilityPartialVRAM:
-					bulletStyled = StyleWarning.Render(bullet)
-				case hardware.SuitabilityFitsRAM:
-					bulletStyled = lipgloss.NewStyle().Foreground(ColorSecondary).Render(bullet)
-				case hardware.SuitabilityExceeds:
-					bulletStyled = StyleDanger.Render(bullet)
-				}
-			} else {
-				bulletStyled = StyleListItem.Render(bullet)
-			}
-
-			isRunningStr := ""
-			if m.isModelRunning(mod.FilePath) {
-				isRunningStr = "▶ "
-			}
-
-			rawName := item.Label
-			isFavorite := m.config.IsFavorite(mod.FilePath)
-
-			indent := ""
-			if strings.HasPrefix(rawName, "  ") {
-				indent = "  "
-				rawName = strings.TrimPrefix(rawName, "  ")
-			}
-
-			maxNameLen := leftWidth - 10
-			if isFavorite {
-				maxNameLen -= 2
-			}
-			if maxNameLen < 4 {
-				maxNameLen = 4
-			}
-			rawName = TruncateVisual(rawName, maxNameLen, "...")
-
-			var displayName string
-			if isFavorite {
-				displayName = indent + StyleStar.Render("★ ") + rawName
-			} else {
-				displayName = indent + rawName
-			}
-
-			selWidth := leftWidth - 2
-			if selWidth < 10 {
-				selWidth = 10
-			}
-			if idx == m.selected {
-				leftSb.WriteString(
-					StyleSelectedListItem.Width(selWidth).Render(
-						fmt.Sprintf("%s%s %s", isRunningStr, bullet, displayName),
-					) + "\n",
-				)
-			} else {
-				leftSb.WriteString(
-					fmt.Sprintf("  %s%s %s\n", isRunningStr, bulletStyled, StyleListItem.Render(displayName)),
-				)
 			}
 		}
-	}
 
-	var leftTitle, rightTitle string
-	leftBorderColor := ColorBorder
-	rightBorderColor := ColorBorder
+		var leftTitle, rightTitle string
+		leftBorderColor := ColorBorder
+		rightBorderColor := ColorBorder
 
-	if m.onboardingActive {
-		if m.onboardingStep == StepModelSidebar {
-			leftBorderColor = ColorPrimary
-		} else if m.onboardingStep == StepDetailsPanel {
-			rightBorderColor = ColorPrimary
-		}
-		leftTitle = StyleTitle.Render("Models")
-		rightTitle = StyleTitle.Render("Details")
-	} else {
-		if m.focusRight {
-			rightBorderColor = ColorPrimary
+		if m.onboardingActive {
+			if m.onboardingStep == StepModelSidebar {
+				leftBorderColor = ColorPrimary
+			} else if m.onboardingStep == StepDetailsPanel {
+				rightBorderColor = ColorPrimary
+			}
 			leftTitle = StyleTitle.Render("Models")
-			rightTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Details")
-		} else {
-			leftBorderColor = ColorPrimary
-			leftTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Models")
 			rightTitle = StyleTitle.Render("Details")
+		} else {
+			if m.focusRight {
+				rightBorderColor = ColorPrimary
+				leftTitle = StyleTitle.Render("Models")
+				rightTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Details")
+			} else {
+				leftBorderColor = ColorPrimary
+				leftTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Models")
+				rightTitle = StyleTitle.Render("Details")
+			}
 		}
-	}
 
-	leftPanelContent := fmt.Sprintf("%s\n%s", leftTitle, leftSb.String())
+		leftPanelContent := fmt.Sprintf("%s\n%s", leftTitle, leftSb.String())
 
-	leftView := StyleLeftPanel.Copy().
-		BorderForeground(leftBorderColor).
-		Width(leftWidth).
-		Height(panelHeight).
-		Render(leftPanelContent)
+		leftView := StyleLeftPanel.Copy().
+			BorderForeground(leftBorderColor).
+			Width(leftWidth).
+			Height(panelHeight).
+			Render(leftPanelContent)
 
-	rightPanelContent := fmt.Sprintf("%s\n%s", rightTitle, m.rightPanelView(rightWidth, panelHeight))
-	rightView := StyleRightPanel.Copy().
-		BorderForeground(rightBorderColor).
-		Width(rightWidth).
-		Height(panelHeight).
-		Render(rightPanelContent)
+		rightPanelContent := fmt.Sprintf("%s\n%s", rightTitle, m.rightPanelView(rightWidth, panelHeight))
+		rightView := StyleRightPanel.Copy().
+			BorderForeground(rightBorderColor).
+			Width(rightWidth).
+			Height(panelHeight).
+			Render(rightPanelContent)
 
-	mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftView, rightView)
+		mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftView, rightView)
 
-	header := lipgloss.NewStyle().MarginBottom(1).Render(
-		RenderGradient("RUNORA — Local AI Control Center", ThemeGradientStart, ThemeGradientEnd),
-	)
+		header := lipgloss.NewStyle().MarginBottom(1).Render(
+			RenderGradient("RUNORA — Local AI Control Center", ThemeGradientStart, ThemeGradientEnd),
+		)
 
-	var footer string
-	if m.searchActive {
-		footer = fmt.Sprintf("Search: %s  %s", m.searchInput.View(), StyleHelp.Render("[Esc] Clear/Exit  [Enter] Confirm"))
-	} else {
-		footerItems := []string{
-			fmt.Sprintf("%s Launch", StyleHelpKey.Render("[Enter]")),
-			fmt.Sprintf("%s Favorite", StyleHelpKey.Render("[F]")),
-			fmt.Sprintf("%s Benchmark", StyleHelpKey.Render("[B]")),
-			fmt.Sprintf("%s Dashboard", StyleHelpKey.Render("[V]")),
-			fmt.Sprintf("%s Monitor", StyleHelpKey.Render("[M]")),
-			fmt.Sprintf("%s Settings", StyleHelpKey.Render("[U]")),
-			fmt.Sprintf("%s Downloader", StyleHelpKey.Render("[D]")),
-			fmt.Sprintf("%s Search", StyleHelpKey.Render("[/]")),
-			fmt.Sprintf("%s Stop", StyleHelpKey.Render("[S]")),
-			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		var footer string
+		if m.searchActive {
+			footer = fmt.Sprintf("Search: %s  %s", m.searchInput.View(), StyleHelp.Render("[Esc] Clear/Exit  [Enter] Confirm"))
+		} else {
+			footerItems := []string{
+				fmt.Sprintf("%s Launch", StyleHelpKey.Render("[Enter]")),
+				fmt.Sprintf("%s Favorite", StyleHelpKey.Render("[F]")),
+				fmt.Sprintf("%s Benchmark", StyleHelpKey.Render("[B]")),
+				fmt.Sprintf("%s Dashboard", StyleHelpKey.Render("[V]")),
+				fmt.Sprintf("%s Monitor", StyleHelpKey.Render("[M]")),
+				fmt.Sprintf("%s Logs", StyleHelpKey.Render("[L]")),
+				fmt.Sprintf("%s Settings", StyleHelpKey.Render("[U]")),
+				fmt.Sprintf("%s Downloader", StyleHelpKey.Render("[D]")),
+				fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
+				fmt.Sprintf("%s Search", StyleHelpKey.Render("[/]")),
+				fmt.Sprintf("%s Stop", StyleHelpKey.Render("[S]")),
+				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+			}
+			footer = strings.Join(footerItems, " │ ")
 		}
-		footer = strings.Join(footerItems, " │ ")
+
+		baseView = lipgloss.JoinVertical(lipgloss.Left, header, mainView, StyleHelp.Render(footer))
 	}
 
-	bgView := lipgloss.JoinVertical(lipgloss.Left, header, mainView, StyleHelp.Render(footer))
-	if m.onboardingActive {
-		onboardingOverlay := m.onboardingOverlayView(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, onboardingOverlay)
+	if m.themePickerActive && m.themePicker != nil {
+		pickerView := m.themePicker.View(m.width, m.height)
+		baseView = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, pickerView)
 	}
-	if m.llamaCPPMissingActive {
-		missingOverlay := m.llamaCPPMissingOverlayView(m.width, m.height)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, missingOverlay)
+
+	if m.toasts != nil && m.toasts.Active() {
+		return m.toasts.Overlay(baseView, m.width, m.height)
 	}
-	return bgView
+	return baseView
 }
 
 func (m *BrowserModel) onboardingOverlayView(width int, height int) string {

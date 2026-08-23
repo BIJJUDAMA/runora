@@ -3,11 +3,13 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/model"
+	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
 )
 
@@ -785,6 +787,9 @@ func TestThemeRegistryAndSwitching(t *testing.T) {
 		if theme.Name() == "" {
 			t.Errorf("theme missing Name")
 		}
+		if theme.Description() == "" {
+			t.Errorf("theme %s missing Description", theme.Name())
+		}
 		p := theme.Palette()
 		if p.Primary == nil || p.Secondary == nil || p.Border == nil {
 			t.Errorf("theme %s has invalid palette", theme.Name())
@@ -800,6 +805,409 @@ func TestThemeRegistryAndSwitching(t *testing.T) {
 		t.Errorf("expected next theme after forest to be dracula, got %s", next)
 	}
 }
+
+func TestAccessibilityAndLightThemes(t *testing.T) {
+	// Test Solarized Light
+	sol := resolveTheme("solarized-light")
+	if sol.ID() != "solarized-light" || sol.Name() != "Solarized Light" {
+		t.Errorf("expected Solarized Light theme, got ID=%s Name=%s", sol.ID(), sol.Name())
+	}
+	solPal := sol.Palette()
+	if solPal.Primary == nil || solPal.Secondary == nil || solPal.Text == nil {
+		t.Errorf("invalid Solarized Light palette")
+	}
+
+	// Test Paper Light
+	paper := resolveTheme("paper-light")
+	if paper.ID() != "paper-light" || paper.Name() != "Paper Light" {
+		t.Errorf("expected Paper Light theme, got ID=%s Name=%s", paper.ID(), paper.Name())
+	}
+	paperPal := paper.Palette()
+	if paperPal.Primary == nil || paperPal.Text == nil {
+		t.Errorf("invalid Paper Light palette")
+	}
+
+	// Test High Contrast (WCAG AAA)
+	hc := resolveTheme("high-contrast")
+	if hc.ID() != "high-contrast" || hc.Name() != "High Contrast" {
+		t.Errorf("expected High Contrast theme, got ID=%s Name=%s", hc.ID(), hc.Name())
+	}
+	hcPal := hc.Palette()
+	if hcPal.Primary == nil || hcPal.Text == nil || hcPal.Border == nil {
+		t.Errorf("invalid High Contrast palette")
+	}
+}
+
+func TestThemePickerModel(t *testing.T) {
+	picker := NewThemePickerModel("forest")
+	if picker.ActiveThemeItem().ID() != "forest" {
+		t.Errorf("expected initial active theme to be forest, got %s", picker.ActiveThemeItem().ID())
+	}
+
+	// Navigate Down (j)
+	_, done, applied, themeID := picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if done || applied {
+		t.Errorf("expected done=false, applied=false on navigation")
+	}
+	if themeID != "dracula" {
+		t.Errorf("expected next theme to be dracula, got %s", themeID)
+	}
+	if ActiveTheme.ID() != "dracula" {
+		t.Errorf("expected live preview to activate dracula theme, got %s", ActiveTheme.ID())
+	}
+
+	// Navigate Up (k)
+	_, done, applied, themeID = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if themeID != "forest" {
+		t.Errorf("expected theme to return to forest, got %s", themeID)
+	}
+
+	// Test View rendering
+	v := picker.View(80, 24)
+	if len(v) == 0 {
+		t.Errorf("expected non-empty View from ThemePickerModel")
+	}
+
+	// Test Confirmation (Enter)
+	_, done, applied, chosen := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !done || !applied || chosen != "forest" {
+		t.Errorf("expected done=true, applied=true, chosen=forest on Enter, got done=%v applied=%v chosen=%s", done, applied, chosen)
+	}
+
+	// Test Cancellation (Esc reverts to original theme)
+	picker2 := NewThemePickerModel("forest")
+	picker2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // moves to dracula
+	if ActiveTheme.ID() != "dracula" {
+		t.Errorf("expected live preview to be dracula")
+	}
+	_, done, applied, original := picker2.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !done || applied || original != "forest" {
+		t.Errorf("expected done=true, applied=false, original=forest on Esc, got done=%v applied=%v original=%s", done, applied, original)
+	}
+	if ActiveTheme.ID() != "forest" {
+		t.Errorf("expected theme to revert to forest after Esc, got %s", ActiveTheme.ID())
+	}
+}
+
+func TestToastManagerLifecycle(t *testing.T) {
+	tm := NewToastManager()
+	if tm.Active() {
+		t.Errorf("expected empty ToastManager to not be active")
+	}
+
+	// Add informational toast
+	cmd := tm.Show("Test notification")
+	if cmd == nil {
+		t.Errorf("expected non-nil tea.Cmd from Show")
+	}
+	if !tm.Active() || tm.Count() != 1 {
+		t.Fatalf("expected 1 active toast, got %d", tm.Count())
+	}
+	if tm.GetToasts()[0].Message != "Test notification" {
+		t.Errorf("expected toast message 'Test notification', got %q", tm.GetToasts()[0].Message)
+	}
+
+	// Add success, warning, danger toasts
+	tm.ShowSuccess("Theme: Nord applied")
+	tm.ShowWarning("Low disk space")
+	tm.ShowDanger("Server failed")
+
+	if tm.Count() != 4 {
+		t.Errorf("expected 4 active toasts, got %d", tm.Count())
+	}
+
+	rendered := tm.RenderToasts()
+	if len(rendered) == 0 {
+		t.Errorf("expected non-empty RenderToasts output")
+	}
+
+	// Test Overlay
+	base := "Line 1: Main View Content\nLine 2: Models Sidebar\nLine 3: Details Panel"
+	overlaid := tm.Overlay(base, 80, 24)
+	if len(overlaid) == 0 || overlaid == base {
+		t.Errorf("expected overlaid output to differ from base")
+	}
+
+	// Test Remove by ID
+	firstID := tm.GetToasts()[0].ID
+	tm.Remove(firstID)
+	if tm.Count() != 3 {
+		t.Errorf("expected 3 toasts after removal, got %d", tm.Count())
+	}
+
+	// Test ToastExpireMsg
+	remainingID := tm.GetToasts()[0].ID
+	tm.Update(ToastExpireMsg{ID: remainingID})
+	if tm.Count() != 2 {
+		t.Errorf("expected 2 toasts after ToastExpireMsg, got %d", tm.Count())
+	}
+
+	// Test Clear
+	tm.Clear()
+	if tm.Active() || tm.Count() != 0 {
+		t.Errorf("expected 0 toasts after Clear")
+	}
+}
+
+func TestBrowserThemePickerIntegration(t *testing.T) {
+	// Backup user config if exists
+	hasUserConfig := false
+	if _, err := os.Stat("config.json"); err == nil {
+		hasUserConfig = true
+		_ = os.Rename("config.json", "config.json.tmp")
+	}
+	defer func() {
+		_ = os.Remove("config.json")
+		if hasUserConfig {
+			_ = os.Rename("config.json.tmp", "config.json")
+		}
+	}()
+
+	cfg := config.DefaultConfig()
+	cfg.Theme = "forest"
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+
+	// Press 'y' in ScreenBrowser to open ThemePickerModel
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	bm = m.(*BrowserModel)
+
+	if !bm.themePickerActive || bm.themePicker == nil {
+		t.Fatalf("expected themePickerActive to be true and themePicker initialized")
+	}
+
+	// Navigate to Dracula with 'j'
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	bm = m.(*BrowserModel)
+
+	if ActiveTheme.ID() != "dracula" {
+		t.Errorf("expected live preview to switch to dracula, got %s", ActiveTheme.ID())
+	}
+
+	// Confirm selection with Enter
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+
+	if bm.themePickerActive {
+		t.Errorf("expected themePickerActive to be false after confirmation")
+	}
+	if bm.config.Theme != "dracula" {
+		t.Errorf("expected config theme to be dracula, got %s", bm.config.Theme)
+	}
+	if bm.toasts.Count() != 1 {
+		t.Errorf("expected 1 toast queued after applying theme, got %d", bm.toasts.Count())
+	}
+}
+
+func TestBrowserFloatingToastsOnActions(t *testing.T) {
+	// Backup user config if exists
+	hasUserConfig := false
+	if _, err := os.Stat("config.json"); err == nil {
+		hasUserConfig = true
+		_ = os.Rename("config.json", "config.json.tmp")
+	}
+	defer func() {
+		_ = os.Remove("config.json")
+		if hasUserConfig {
+			_ = os.Rename("config.json.tmp", "config.json")
+		}
+	}()
+
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+
+	// Add mock GGUF models
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Qwen 2.5", FilePath: "models/qwen2.5.gguf", Task: "TEXT_GENERATION"},
+	}
+	bm.rebuildSidebar()
+	bm.selected = 1 // select model entry
+
+	// 1. Toggle favorite with 'f'
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	bm = m.(*BrowserModel)
+
+	if bm.toasts.Count() < 1 {
+		t.Errorf("expected toast after toggling favorite")
+	}
+
+	// 2. Cycle task with 'e'
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	bm = m.(*BrowserModel)
+
+	if bm.models[0].Task != "EMBEDDING" {
+		t.Errorf("expected task to cycle to EMBEDDING, got %s", bm.models[0].Task)
+	}
+
+	// 3. Stop server with 's'
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	bm = m.(*BrowserModel)
+
+	if bm.toasts.Count() < 3 {
+		t.Errorf("expected multiple toasts after actions, got %d", bm.toasts.Count())
+	}
+
+	// 4. Test View rendering with floating toasts
+	bm.width = 80
+	bm.height = 24
+	bm.loading = false
+	viewOutput := bm.View()
+	if len(viewOutput) == 0 {
+		t.Errorf("expected non-empty view output with floating toasts")
+	}
+}
+
+func TestDashboardProfileManagementAndClipboard(t *testing.T) {
+	tempProfilesDir, err := os.MkdirTemp("", "runora-dash-prof-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempProfilesDir)
+
+	cfg := config.DefaultConfig()
+	cfg.Favorites = []string{}
+	cfg.RecentLaunches = []string{}
+	cfg.OnboardingCompleted = true
+	cfg.Paths.Profiles = tempProfilesDir
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.onboardingActive = false
+
+	// Load default profiles
+	profs, _ := profile.LoadAll(tempProfilesDir)
+	bm.profiles = profs
+
+	// Add mock model and load profiles
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Llama-3-8B", FilePath: "models/llama-3-8b.gguf"},
+	}
+	bm.rebuildSidebar()
+	bm.selected = 1 // select model
+
+	// 1. Open Dashboard
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenDashboard || bm.dashboard == nil {
+		t.Fatalf("expected to be in ScreenDashboard")
+	}
+
+	// 2. Test Clipboard Copy [C]
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	bm = m.(*BrowserModel)
+
+	if bm.dashboard.ToastMessage == "" {
+		t.Errorf("expected dashboard ToastMessage to be set after pressing 'c'")
+	}
+	cmdPreview := bm.dashboard.GetLaunchCommand()
+	if !strings.Contains(cmdPreview, "llama-server") || !strings.Contains(cmdPreview, "models/llama-3-8b.gguf") {
+		t.Errorf("unexpected command generated: %q", cmdPreview)
+	}
+
+	// 3. Test Duplicating profile [N]
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenProfileCreator || bm.profileCreatorModel == nil {
+		t.Fatalf("expected to be in ScreenProfileCreator after pressing 'n'")
+	}
+	if bm.profileCreatorModel.mode != ModeDuplicate {
+		t.Errorf("expected mode to be ModeDuplicate")
+	}
+	if !strings.Contains(bm.profileCreatorModel.nameInput.Value(), "(Copy)") {
+		t.Errorf("expected duplicate name input to contain '(Copy)', got %q", bm.profileCreatorModel.nameInput.Value())
+	}
+
+	// Save duplicate profile (Press Enter)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenDashboard {
+		t.Errorf("expected to return to ScreenDashboard after saving duplicate")
+	}
+
+	// Verify duplicate exists
+	foundCopy := false
+	for _, p := range bm.profiles {
+		if strings.Contains(p.Name, "(Copy)") {
+			foundCopy = true
+			break
+		}
+	}
+	if !foundCopy {
+		t.Errorf("expected duplicated profile to be in loaded profiles")
+	}
+
+	// 4. Test Deleting default profile (must fail/show toast)
+	// Switch to default profile "Fast"
+	for i, p := range bm.dashboard.Profiles {
+		if p.Name == "Fast" {
+			bm.dashboard.ActiveIdx = i
+			break
+		}
+	}
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	bm = m.(*BrowserModel)
+
+	if !strings.Contains(bm.dashboard.ToastMessage, "Cannot delete") {
+		t.Errorf("expected cannot delete warning toast when attempting to delete Fast profile, got %q", bm.dashboard.ToastMessage)
+	}
+
+	// 5. Test Deleting custom duplicate profile
+	// Switch to the duplicate profile
+	for i, p := range bm.dashboard.Profiles {
+		if strings.Contains(p.Name, "(Copy)") {
+			bm.dashboard.ActiveIdx = i
+			break
+		}
+	}
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	bm = m.(*BrowserModel)
+
+	if !strings.Contains(bm.dashboard.ToastMessage, "Deleted custom profile") {
+		t.Errorf("expected deleted toast when deleting custom profile, got %q", bm.dashboard.ToastMessage)
+	}
+}
+
+func TestBrowserLogStreamerTrigger(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Qwen 2.5", FilePath: "models/qwen2.5.gguf"},
+	}
+	bm.filterModels()
+
+	// Initial screen mode is ScreenBrowser
+	if bm.screenMode != ScreenBrowser {
+		t.Errorf("expected screenMode to be ScreenBrowser, got %d", bm.screenMode)
+	}
+
+	// Press [L] to open LogStreamerModel
+	m, cmd := bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenLogStreamer {
+		t.Errorf("expected screenMode to transition to ScreenLogStreamer, got %d", bm.screenMode)
+	}
+	if bm.logStreamerModel == nil {
+		t.Fatalf("expected logStreamerModel to be initialized")
+	}
+	if cmd == nil {
+		t.Errorf("expected Init cmd batch from log streamer")
+	}
+
+	// Press [Esc] in LogStreamerModel to return to ScreenBrowser
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenBrowser {
+		t.Errorf("expected screenMode to return to ScreenBrowser on Esc, got %d", bm.screenMode)
+	}
+}
+
 
 
 
