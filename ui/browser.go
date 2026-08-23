@@ -1304,13 +1304,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lifecycleModel.NextRuntime()
 			case "up", "k", "K":
 				m.lifecycleModel.PrevRuntime()
-			case "enter", "c", "C":
+			case "u", "U", "c", "C", "enter":
 				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-					cmds = append(cmds, m.lifecycleModel.StartCheckSelected())
-				}
-			case " ", "u", "U":
-				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-					cmds = append(cmds, m.lifecycleModel.StartUpdateSelected())
+					cmds = append(cmds, m.lifecycleModel.StartCheckAll())
 				}
 			case "r", "R":
 				if m.lifecycleModel.hasBackup && m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
@@ -1325,29 +1321,18 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lifecycleModel.updatingRuntime = "onnx"
 					cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
 				}
-			case "y", "Y":
-				m.themePicker = NewThemePickerModel(m.config.Theme)
-				m.themePickerActive = true
-			case "s", "S", "b", "B", "t", "T", "g", "G":
-				_, cmd := m.lifecycleModel.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			case "v", "V":
-				if m.lifecycleModel.SelectedRuntime == 2 {
-					if !m.lifecycleModel.appChecking {
-						cmds = append(cmds, m.lifecycleModel.StartAppCheck())
-					}
-				} else {
-					_, cmd := m.lifecycleModel.Update(msg)
-					if cmd != nil {
-						cmds = append(cmds, cmd)
-					}
-				}
 			case "a", "A":
 				if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
 					m.lifecycleModel.SelectedRuntime = 2
 					cmds = append(cmds, m.lifecycleModel.StartAppUpdate())
+				}
+			case "y", "Y":
+				m.themePicker = NewThemePickerModel(m.config.Theme)
+				m.themePickerActive = true
+			case "s", "S", "b", "B", "t", "T", "g", "G", "v", "V", "e", "E":
+				_, cmd := m.lifecycleModel.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
 				}
 			case "n", "N":
 				m.config.OnboardingCompleted = false
@@ -2039,17 +2024,25 @@ func (m *BrowserModel) renderFooter(width int) string {
 		}
 	case ScreenSettings:
 		breadcrumb = "SETTINGS"
-		pills = []string{
-			fmt.Sprintf("%s Select", StyleHelpKey.Render("[↑/↓]")),
-			fmt.Sprintf("%s Update", StyleHelpKey.Render("[Space/U]")),
-			fmt.Sprintf("%s Check", StyleHelpKey.Render("[Enter/C]")),
-			fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")),
-			fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")),
-			fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")),
-			fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")),
-			fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
-			fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
-			fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+		if m.lifecycleModel != nil && m.lifecycleModel.tokenEditActive {
+			pills = []string{
+				fmt.Sprintf("%s Save Token", StyleHelpKey.Render("[Enter]")),
+				fmt.Sprintf("%s Paste", StyleHelpKey.Render("[Ctrl+V]")),
+				fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")),
+			}
+		} else {
+			pills = []string{
+				fmt.Sprintf("%s Check Updates", StyleHelpKey.Render("[U]")),
+				fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")),
+				fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")),
+				fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")),
+				fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")),
+				fmt.Sprintf("%s Slot", StyleHelpKey.Render("[V]")),
+				fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")),
+				fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
+				fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+			}
 		}
 	case ScreenDownloader:
 		breadcrumb = "DOWNLOADS"

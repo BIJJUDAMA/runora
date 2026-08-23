@@ -357,6 +357,10 @@ func (m *LifecycleModel) StartOnnxCheckOnly() tea.Cmd {
 	return m.ReadUpdateChan(ch)
 }
 
+func (m *LifecycleModel) StartCheckAll() tea.Cmd {
+	return tea.Batch(m.StartCheckOnly(), m.StartOnnxCheckOnly(), m.StartAppCheck())
+}
+
 func (m *LifecycleModel) StartUpdate() tea.Cmd {
 	ch := make(chan updateMsg)
 
@@ -819,9 +823,8 @@ func (m *LifecycleModel) View(width int, height int) string {
 		tokenSB.WriteString(fmt.Sprintf("  Input: > %s\n\n", m.tokenInput.View()))
 		tokenSB.WriteString(fmt.Sprintf("  Controls: %s Save  │  %s Paste  │  %s Cancel\n", StyleHelpKey.Render("[Enter]"), StyleHelpKey.Render("[Ctrl+V]"), StyleHelpKey.Render("[Esc]")))
 	} else {
-		tokenSB.WriteString(fmt.Sprintf("  %-24s %s  %s  %s\n", "GitHub Token (GITHUB_TOKEN):", ghTokenStr, ghStatus, lipgloss.NewStyle().Foreground(ColorPrimary).Render("[G: Edit / Paste]")))
-		tokenSB.WriteString(fmt.Sprintf("  %-24s %s  %s  %s\n\n", "Hugging Face (HF_TOKEN):", hfTokenStr, hfStatus, lipgloss.NewStyle().Foreground(ColorPrimary).Render("[T: Edit / Paste]")))
-		tokenSB.WriteString(fmt.Sprintf("  Credentials Quick Action: Press %s to set GitHub Token, %s to set Hugging Face Token\n", StyleHelpKey.Render("[G]"), StyleHelpKey.Render("[T]")))
+		tokenSB.WriteString(fmt.Sprintf("  %-28s %-16s %-16s %s\n", "GitHub Token (ghp_***):", ghTokenStr, ghStatus, StyleHelpKey.Render("[G: Edit / Paste]")))
+		tokenSB.WriteString(fmt.Sprintf("  %-28s %-16s %-16s %s\n", "Hugging Face Token (hf_***):", hfTokenStr, hfStatus, StyleHelpKey.Render("[T: Edit / Paste]")))
 	}
 	tokenContent := strings.TrimRight(tokenSB.String(), "\n")
 
@@ -857,7 +860,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 	}
 	llamaSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Backend Accelerator:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(backendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
 
-	slotsDisplay := lipgloss.NewStyle().Foreground(ColorMuted).Render("None installed in versions/")
+	slotsDisplay := lipgloss.NewStyle().Foreground(ColorMuted).Render("None")
 	if len(m.installedVersions) > 0 {
 		var slotItems []string
 		for _, s := range m.installedVersions {
@@ -871,12 +874,15 @@ func (m *LifecycleModel) View(width int, height int) string {
 	}
 	llamaSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Installed Slots:", slotsDisplay, lipgloss.NewStyle().Foreground(ColorMuted).Render("[V: Switch]")))
 
-	latestLlamaStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([C] to check)")
+	updateLlamaStatus := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([U] to check all)")
 	if m.latestTagName != "" {
-		channelLabel := strings.Title(string(m.SelectedChannel))
-		latestLlamaStr = fmt.Sprintf("%s (%s)", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName), channelLabel)
+		if m.latestTagName == m.localVersion {
+			updateLlamaStatus = StyleSuccess.Render("✓ Up-to-date (" + m.latestTagName + ")")
+		} else {
+			updateLlamaStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.latestTagName + " (Update Available)  [U: Install]")
+		}
 	}
-	llamaSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Latest Available:", latestLlamaStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[C: Check  │  U: Update]")))
+	llamaSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Update Status:", updateLlamaStatus))
 
 	llamaBackupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("None")
 	if m.hasLlamaBackup {
@@ -906,11 +912,15 @@ func (m *LifecycleModel) View(width int, height int) string {
 	}
 	onnxSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Backend Accelerator:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(onnxBackendDisplay)))
 
-	latestOnnxStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([O] to install/check)")
+	updateOnnxStatus := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([U] to check all)")
 	if m.onnxLatestVersion != "" {
-		latestOnnxStr = lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.onnxLatestVersion)
+		if m.onnxLatestVersion == m.onnxLocalVersion {
+			updateOnnxStatus = StyleSuccess.Render("✓ Up-to-date (" + m.onnxLatestVersion + ")")
+		} else {
+			updateOnnxStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.onnxLatestVersion + " (Update Available)  [O: Install]")
+		}
 	}
-	onnxSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Latest Available:", latestOnnxStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[O: Install/Update]")))
+	onnxSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Update Status:", updateOnnxStatus))
 
 	onnxBackupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("None")
 	if m.hasOnnxBackup {
@@ -923,24 +933,26 @@ func (m *LifecycleModel) View(width int, height int) string {
 	var appSB strings.Builder
 	appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
 	appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Runora Version:", appVerStr))
+
+	updateAppStatus := StyleSuccess.Render("✓ Up-to-date")
 	if m.appChecking {
-		appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")))
+		updateAppStatus = lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")
 	} else if m.appCheckErr != nil {
-		appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", StyleDanger.Render("Check failed")))
+		updateAppStatus = StyleDanger.Render("Check failed")
 	} else if m.appLatestTag != "" {
-		if m.appUpdateSuccess || m.appLatestTag == m.appVersion {
-			appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
+		if m.appLatestTag == m.appVersion || m.appUpdateSuccess {
+			updateAppStatus = StyleSuccess.Render("✓ Up-to-date (" + m.appLatestTag + ")")
 		} else {
-			appSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag), lipgloss.NewStyle().Foreground(ColorMuted).Render("[A: Self-Update]")))
+			updateAppStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag + " (Update Available)  [A: Self-Update]")
 		}
-	} else {
-		appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Up-to-date")))
 	}
+	appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Update Status:", updateAppStatus))
+
 	themeName := strings.Title(m.config.Theme)
 	if themeName == "" {
 		themeName = "Forest"
 	}
-	appSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "UI Theme Palette:", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(themeName), lipgloss.NewStyle().Foreground(ColorMuted).Render("[Y: Switch Theme (10 Palettes)]")))
+	appSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "UI Theme Palette:", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(themeName), lipgloss.NewStyle().Foreground(ColorMuted).Render("[Y: Switch Theme]")))
 	appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Onboarding Tour:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[N: Re-run Welcome Tour]")))
 	appContent := strings.TrimRight(appSB.String(), "\n")
 
@@ -998,29 +1010,6 @@ func (m *LifecycleModel) View(width int, height int) string {
 		}
 		elements = append(elements, statusSB.String())
 	}
-
-	// Help footer
-	var helpKeys []string
-	if !m.tokenEditActive {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Slot", StyleHelpKey.Render("[V]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Check llama", StyleHelpKey.Render("[C]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Update llama", StyleHelpKey.Render("[U]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Update ONNX", StyleHelpKey.Render("[O]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Onboarding", StyleHelpKey.Render("[N]")))
-	} else {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Save Token", StyleHelpKey.Render("[Enter]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Paste", StyleHelpKey.Render("[Ctrl+V]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")))
-	}
-
-	elements = append(elements, "  "+strings.Join(helpKeys, " │ "))
 
 	return lipgloss.JoinVertical(lipgloss.Left, elements...)
 }
