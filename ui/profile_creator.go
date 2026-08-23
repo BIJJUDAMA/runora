@@ -227,18 +227,6 @@ func (pc *ProfileCreatorModel) updateFocus() {
 
 func (pc *ProfileCreatorModel) View(width int, height int) string {
 	var sb strings.Builder
-	sb.WriteString("\n")
-
-	var title string
-	switch pc.mode {
-	case ModeEdit:
-		title = fmt.Sprintf("EDIT PROFILE: %s", pc.origName)
-	case ModeDuplicate:
-		title = fmt.Sprintf("DUPLICATE PROFILE: %s", pc.origName)
-	default:
-		title = "CREATE CUSTOM PROFILE"
-	}
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(title)))
 
 	nameStyle := lipgloss.NewStyle().Foreground(ColorWhite)
 	ctxStyle := lipgloss.NewStyle().Foreground(ColorWhite)
@@ -266,22 +254,21 @@ func (pc *ProfileCreatorModel) View(width int, height int) string {
 	sb.WriteString("  " + pc.gpuInput.View() + "\n\n")
 
 	sb.WriteString("  " + portStyle.Render("Port Number:") + "\n")
-	sb.WriteString("  " + pc.portInput.View() + "\n\n")
+	sb.WriteString("  " + pc.portInput.View() + "\n")
 
-	helpStr := fmt.Sprintf("%s Switch fields  %s Save profile  %s Cancel",
-		StyleHelpKey.Render("[Tab / Shift+Tab]"),
-		StyleHelpKey.Render("[Enter]"),
-		StyleHelpKey.Render("[Esc]"),
-	)
-	sb.WriteString("  " + helpStr + "\n")
-
-	boxWidth := width - 4
-	if boxWidth < 66 {
-		boxWidth = 66
+	var title string
+	switch pc.mode {
+	case ModeEdit:
+		title = fmt.Sprintf("Edit Profile: %s", pc.origName)
+	case ModeDuplicate:
+		title = fmt.Sprintf("Duplicate Profile: %s", pc.origName)
+	default:
+		title = "Create Custom Profile"
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Width(boxWidth).
-		Render(sb.String())
+
+	cardHeight := height
+	if cardHeight < 12 {
+		cardHeight = 12
+	}
+	return SurfaceCardWithHeight(title, sb.String(), width, cardHeight, true, "Profile Config")
 }

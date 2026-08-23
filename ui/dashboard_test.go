@@ -8,6 +8,7 @@ import (
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func createTestModelAndSpecs() (*model.GGUFMetadata, *hardware.HardwareSpecs, []*profile.Profile) {
@@ -63,12 +64,9 @@ func TestDualColumnBentoDashboardLayout(t *testing.T) {
 	height := 35
 	rendered := dashboard.View(width, height)
 
-	// 1. Verify Top Title & Model Name
-	if !strings.Contains(rendered, "LAUNCH DASHBOARD") {
-		t.Errorf("expected view to contain header 'LAUNCH DASHBOARD', got:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, meta.Name) {
-		t.Errorf("expected view to contain model name %q, got:\n%s", meta.Name, rendered)
+	// 1. Verify Model Name in Left Card
+	if !strings.Contains(rendered, "Meta-Llama-3-8B") {
+		t.Errorf("expected view to contain model name 'Meta-Llama-3-8B', got:\n%s", rendered)
 	}
 
 	// 2. Verify Left Column Bento Card: "Hardware Fit & Memory Estimate"
@@ -142,9 +140,9 @@ func TestDualColumnBentoDashboardLayout(t *testing.T) {
 		t.Errorf("expected right bottom card to display '[C] Copy to clipboard' hint, got:\n%s", rendered)
 	}
 
-	// 6. Verify Bottom Help Prompts
-	if !strings.Contains(rendered, "[Enter]") || !strings.Contains(rendered, "Launch") {
-		t.Errorf("expected bottom help prompts to contain '[Enter] Launch', got:\n%s", rendered)
+	// 6. Verify Height matches exactly height
+	if h := lipgloss.Height(rendered); h != height {
+		t.Errorf("expected rendered height to match %d, got %d", height, h)
 	}
 
 	// 7. Verify STRICT ZERO EMOJIS across the entire dashboard view

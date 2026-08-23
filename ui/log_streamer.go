@@ -534,28 +534,12 @@ func (m *LogStreamerModel) View(width, height int) string {
 
 	sb.WriteString("  " + strings.Repeat("─", divWidth) + "\n")
 
-	// Footer Help Bar
-	scrollStatus := "Auto-Scroll: ON"
-	if !m.autoScroll {
-		scrollStatus = "Auto-Scroll: OFF (Scrolled)"
+	cardHeight := height
+	if cardHeight < 12 {
+		cardHeight = 12
 	}
-	helpLeft := fmt.Sprintf("%s Pause/Resume  %s Filter  %s Clear  %s Switch Server  %s Close",
-		StyleHelpKey.Render("[Space]"),
-		StyleHelpKey.Render("[/]"),
-		StyleHelpKey.Render("[C]"),
-		StyleHelpKey.Render("[Tab]"),
-		StyleHelpKey.Render("[Esc]"),
-	)
-	helpRight := lipgloss.NewStyle().Foreground(ColorMuted).Render(scrollStatus)
-
-	sb.WriteString(fmt.Sprintf("  %-*s %s\n", divWidth-len(scrollStatus)-2, helpLeft, helpRight))
-
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Padding(0, 1).
-		Width(boxWidth).
-		Render(sb.String())
+	contentStr := strings.TrimRight(sb.String(), "\n")
+	return SurfaceCardWithHeight("Live Process Log Streamer", contentStr, width, cardHeight, true, statusBadge)
 }
 
 func formatLogLine(line string, query string, maxLen int) string {

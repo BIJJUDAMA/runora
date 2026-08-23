@@ -78,15 +78,12 @@ func (b *BenchmarkProgressModel) View(width int, height int) string {
 		sb.WriteString("  " + lipgloss.NewStyle().Foreground(ColorMuted).Italic(true).Render("Please wait... This may take up to 20 seconds.") + "\n")
 	}
 
-	boxWidth := width - 4
-	if boxWidth < 50 {
-		boxWidth = 50
+	cardHeight := height
+	if cardHeight < 12 {
+		cardHeight = 12
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Width(boxWidth).
-		Render(sb.String())
+	contentStr := strings.TrimRight(sb.String(), "\n")
+	return SurfaceCardWithHeight("Model Benchmark Runner", contentStr, width, cardHeight, true, "Running")
 }
 
 type PerformanceDashboardModel struct {
@@ -297,11 +294,10 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 	// Assemble SurfaceCards with distributed height
 	h1, h2, h3 := 0, 0, 0
 	if height > 0 {
-		availHeight := height - 1 // Footer takes 1 line
-		if availHeight > 20 {
+		if height > 16 {
 			h3 = 5
 			h2 = 9
-			h1 = availHeight - h3 - h2
+			h1 = height - h3 - h2
 		}
 	}
 
@@ -310,12 +306,6 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 	card2 := SurfaceCardWithHeight("Throughput & Latency (Tokens/sec)", chartContent, cardWidth, h2, false, "TTFT + Decode")
 	card3 := SurfaceCardWithHeight("Test Platform", hwContent, cardWidth, h3, false, "Specs")
 
-	helpFooter := fmt.Sprintf("  %s Back to Browser  %s Select Run  %s Run Benchmark",
-		StyleHelpKey.Render("[Esc]"),
-		StyleHelpKey.Render("[↑/↓]"),
-		StyleHelpKey.Render("[B]"),
-	)
-
-	return lipgloss.JoinVertical(lipgloss.Left, card1, card2, card3, helpFooter)
+	return lipgloss.JoinVertical(lipgloss.Left, card1, card2, card3)
 }
 

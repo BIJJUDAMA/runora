@@ -94,28 +94,28 @@ func (d *DashboardModel) View(width int, height int) string {
 		return "No profiles found."
 	}
 
-	boxWidth := width - 4
-	if boxWidth < 70 {
-		boxWidth = 70
+	cardWidth := width
+	if cardWidth < 60 {
+		cardWidth = 60
 	}
 
-	gridWidth := boxWidth - 4
-	if gridWidth < 60 {
-		gridWidth = 60
+	leftColWidth := cardWidth / 2
+	rightColWidth := cardWidth - leftColWidth
+	cardHeight := height
+	if cardHeight < 12 {
+		cardHeight = 12
 	}
 
-	leftColWidth := gridWidth / 2
-	rightColWidth := gridWidth - leftColWidth
+	// ── Left Column: Hardware Fit & Memory Estimate ──
+	var leftContent strings.Builder
+	suitabilityBadge := "[SYSTEM RAM]"
 
-	var sb strings.Builder
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("LAUNCH DASHBOARD")))
 	modelName := "No Model Selected"
 	if d.Model != nil {
 		modelName = d.Model.Name
 	}
-	modelName = TruncateVisual(modelName, max(30, width-14), "...")
-	sb.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelName)))
+	modelNameTrunc := TruncateVisual(modelName, max(24, leftColWidth-18), "...")
+	leftContent.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(modelNameTrunc)))
 
 	// Toast notification banner if present and not expired
 	if d.ToastMessage != "" && (d.ToastExpiry.IsZero() || time.Now().Before(d.ToastExpiry)) {
@@ -124,12 +124,8 @@ func (d *DashboardModel) View(width int, height int) string {
 			Foreground(ColorTextOnAccent).
 			Bold(true).
 			Padding(0, 2)
-		sb.WriteString(fmt.Sprintf("  %s\n\n", toastStyle.Render(d.ToastMessage)))
+		leftContent.WriteString(fmt.Sprintf("  %s\n\n", toastStyle.Render(d.ToastMessage)))
 	}
-
-	// ── Left Column: Hardware Fit & Memory Estimate ──
-	var leftContent strings.Builder
-	suitabilityBadge := "[SYSTEM RAM]"
 
 	if d.Model != nil {
 		weightStr := formatSize(d.Model.FileSize)
@@ -209,7 +205,6 @@ func (d *DashboardModel) View(width int, height int) string {
 		leftContent.WriteString("  No model selected.\n")
 	}
 
-	cardHeight := max(16, height-3)
 	leftCard := SurfaceCardWithHeight("Hardware Fit & Memory Estimate", leftContent.String(), leftColWidth, cardHeight, true, suitabilityBadge)
 
 	// ── Right Column: Top Card - Execution Profile ──
@@ -279,26 +274,5 @@ func (d *DashboardModel) View(width int, height int) string {
 	botRightCard := SurfaceCardWithHeight("Launch Command Preview", previewContent.String(), rightColWidth, rightBotHeight, false, "CLI")
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, topRightCard, botRightCard)
 
-	bentoGrid := lipgloss.JoinHorizontal(lipgloss.Top, leftCard, rightCol)
-	sb.WriteString(bentoGrid)
-	sb.WriteString("\n\n")
-
-	// Help prompts
-	helpStr := fmt.Sprintf("  %s Launch  %s Cycle  %s New  %s Edit  %s Dupl  %s Del  %s Copy Cmd  %s Back",
-		StyleHelpKey.Render("[Enter]"),
-		StyleHelpKey.Render("[←/→]"),
-		StyleHelpKey.Render("[P]"),
-		StyleHelpKey.Render("[E]"),
-		StyleHelpKey.Render("[N]"),
-		StyleHelpKey.Render("[D]"),
-		StyleHelpKey.Render("[C]"),
-		StyleHelpKey.Render("[Esc]"),
-	)
-	sb.WriteString(helpStr + "\n")
-
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Width(boxWidth).
-		Render(sb.String())
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftCard, rightCol)
 }
