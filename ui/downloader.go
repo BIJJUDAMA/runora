@@ -630,18 +630,33 @@ func (m *DownloaderModel) View(width int, height int) string {
 
 	helpView := "  " + strings.Join(helpKeys, "  ")
 
-	topCard := SurfaceCard("Direct Model Download", inputSb.String(), width, m.focus == FocusURL || m.focus == FocusFilename, "HuggingFace / Direct")
-	middleCard := SurfaceCard("Curated Model Quick-Picks", qpSb.String(), width, false, "Popular")
-	bottomCard := SurfaceCard("Download Queue & Progress", queueSb.String(), width, m.focus == FocusQueue || m.focus == FocusFileList, fmt.Sprintf("%d active", len(m.queue.GetTasks())))
+	topContent := strings.TrimRight(inputSb.String(), "\n")
+	midContent := strings.TrimRight(qpSb.String(), "\n")
+	botContent := strings.TrimRight(queueSb.String(), "\n")
+
+	// Calculate balanced card height to fill the available height
+	topHeight := 0
+	midHeight := 0
+	botHeight := 0
+
+	helpHeight := 1
+	if height > 0 {
+		availHeight := height - helpHeight
+		if availHeight > 0 {
+			topHeight = availHeight / 3
+			midHeight = (availHeight - topHeight) / 2
+			botHeight = availHeight - topHeight - midHeight
+		}
+	}
+
+	topCard := SurfaceCardWithHeight("Direct Model Download", topContent, width, topHeight, m.focus == FocusURL || m.focus == FocusFilename, "HuggingFace / Direct")
+	middleCard := SurfaceCardWithHeight("Curated Model Quick-Picks", midContent, width, midHeight, false, "Popular")
+	bottomCard := SurfaceCardWithHeight("Download Queue & Progress", botContent, width, botHeight, m.focus == FocusQueue || m.focus == FocusFileList, fmt.Sprintf("%d active", len(m.queue.GetTasks())))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		"",
 		topCard,
-		"",
 		middleCard,
-		"",
 		bottomCard,
-		"",
 		helpView,
 	)
 }
