@@ -35,14 +35,16 @@ type ThemePalette struct {
 type Theme interface {
 	ID() string
 	Name() string
+	Description() string
 	Palette() ThemePalette
 }
 
 // --- Base Default Theme (Fallback / Standard Terminal Palette) ---
 type BaseTheme struct{}
 
-func (t BaseTheme) ID() string   { return "base" }
-func (t BaseTheme) Name() string { return "Default" }
+func (t BaseTheme) ID() string          { return "base" }
+func (t BaseTheme) Name() string        { return "Default" }
+func (t BaseTheme) Description() string { return "Standard terminal default palette" }
 func (t BaseTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#7D56F4"),
@@ -71,8 +73,9 @@ func (t BaseTheme) Palette() ThemePalette {
 // --- Dracula / Dark Purple Theme ---
 type DraculaTheme struct{}
 
-func (t DraculaTheme) ID() string   { return "dracula" }
-func (t DraculaTheme) Name() string { return "Dracula" }
+func (t DraculaTheme) ID() string          { return "dracula" }
+func (t DraculaTheme) Name() string        { return "Dracula" }
+func (t DraculaTheme) Description() string { return "Classic dark purple & neon vampire theme" }
 func (t DraculaTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#BD93F9"),
@@ -101,8 +104,9 @@ func (t DraculaTheme) Palette() ThemePalette {
 // --- Forest Theme ---
 type ForestTheme struct{}
 
-func (t ForestTheme) ID() string   { return "forest" }
-func (t ForestTheme) Name() string { return "Forest" }
+func (t ForestTheme) ID() string          { return "forest" }
+func (t ForestTheme) Name() string        { return "Forest" }
+func (t ForestTheme) Description() string { return "Natural emerald greens and warm amber accents" }
 func (t ForestTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#2E7D32"),
@@ -131,8 +135,9 @@ func (t ForestTheme) Palette() ThemePalette {
 // --- Nord Theme ---
 type NordTheme struct{}
 
-func (t NordTheme) ID() string   { return "nord" }
-func (t NordTheme) Name() string { return "Nord" }
+func (t NordTheme) ID() string          { return "nord" }
+func (t NordTheme) Name() string        { return "Nord" }
+func (t NordTheme) Description() string { return "Arctic, north-bluish clean and elegant palette" }
 func (t NordTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#88C0D0"),
@@ -161,8 +166,9 @@ func (t NordTheme) Palette() ThemePalette {
 // --- Sunset Theme ---
 type SunsetTheme struct{}
 
-func (t SunsetTheme) ID() string   { return "sunset" }
-func (t SunsetTheme) Name() string { return "Sunset" }
+func (t SunsetTheme) ID() string          { return "sunset" }
+func (t SunsetTheme) Name() string        { return "Sunset" }
+func (t SunsetTheme) Description() string { return "Warm dusk glow with coral and golden hues" }
 func (t SunsetTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#FF5F6D"),
@@ -191,8 +197,9 @@ func (t SunsetTheme) Palette() ThemePalette {
 // --- Cyberpunk Theme ---
 type CyberpunkTheme struct{}
 
-func (t CyberpunkTheme) ID() string   { return "cyberpunk" }
-func (t CyberpunkTheme) Name() string { return "Cyberpunk" }
+func (t CyberpunkTheme) ID() string          { return "cyberpunk" }
+func (t CyberpunkTheme) Name() string        { return "Cyberpunk" }
+func (t CyberpunkTheme) Description() string { return "High-energy neon pink, cyan and electric yellow" }
 func (t CyberpunkTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#FF007F"),
@@ -221,8 +228,9 @@ func (t CyberpunkTheme) Palette() ThemePalette {
 // --- Monochrome / Clean Minimalist Theme ---
 type MonochromeTheme struct{}
 
-func (t MonochromeTheme) ID() string   { return "monochrome" }
-func (t MonochromeTheme) Name() string { return "Monochrome" }
+func (t MonochromeTheme) ID() string          { return "monochrome" }
+func (t MonochromeTheme) Name() string        { return "Monochrome" }
+func (t MonochromeTheme) Description() string { return "Ultra-clean grayscale minimalist palette" }
 func (t MonochromeTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#FAFAFA"),
@@ -248,6 +256,99 @@ func (t MonochromeTheme) Palette() ThemePalette {
 	}
 }
 
+// --- Solarized Light Theme (Clean Light Background) ---
+type SolarizedLightTheme struct{}
+
+func (t SolarizedLightTheme) ID() string          { return "solarized-light" }
+func (t SolarizedLightTheme) Name() string        { return "Solarized Light" }
+func (t SolarizedLightTheme) Description() string { return "Classic solarized warm light background palette" }
+func (t SolarizedLightTheme) Palette() ThemePalette {
+	return ThemePalette{
+		Primary:        lipgloss.Color("#268BD2"),
+		Secondary:      lipgloss.Color("#2AA198"),
+		Accent:         lipgloss.Color("#D33682"),
+		Border:         lipgloss.Color("#93A1A1"),
+		Selected:       lipgloss.Color("#EEE8D5"),
+		Muted:          lipgloss.Color("#657B83"),
+		Text:           lipgloss.Color("#073642"),
+		TextMuted:      lipgloss.Color("#586E75"),
+		TextDim:        lipgloss.Color("#93A1A1"),
+		TextOnAccent:   lipgloss.Color("#FDF6E3"),
+		Gold:           lipgloss.Color("#B58900"),
+		Focus:          lipgloss.Color("#268BD2"),
+		Dim:            lipgloss.Color("#FDF6E3"),
+		Success:        lipgloss.Color("#859900"),
+		Warning:        lipgloss.Color("#CB4B16"),
+		Danger:         lipgloss.Color("#DC322F"),
+		ProgressFilled: lipgloss.Color("#268BD2"),
+		ProgressEmpty:  lipgloss.Color("#EEE8D5"),
+		GradientStart:  "#268BD2",
+		GradientEnd:    "#2AA198",
+	}
+}
+
+// --- Paper Light Theme (Warm Newsprint / Reader) ---
+type PaperLightTheme struct{}
+
+func (t PaperLightTheme) ID() string          { return "paper-light" }
+func (t PaperLightTheme) Name() string        { return "Paper Light" }
+func (t PaperLightTheme) Description() string { return "Warm ivory parchment background with dark ink text" }
+func (t PaperLightTheme) Palette() ThemePalette {
+	return ThemePalette{
+		Primary:        lipgloss.Color("#1A5FB4"),
+		Secondary:      lipgloss.Color("#26A269"),
+		Accent:         lipgloss.Color("#C64600"),
+		Border:         lipgloss.Color("#C0BFBC"),
+		Selected:       lipgloss.Color("#E1DEDB"),
+		Muted:          lipgloss.Color("#77767B"),
+		Text:           lipgloss.Color("#1E1E1E"),
+		TextMuted:      lipgloss.Color("#5E5C64"),
+		TextDim:        lipgloss.Color("#9A9996"),
+		TextOnAccent:   lipgloss.Color("#FFFFFF"),
+		Gold:           lipgloss.Color("#D88900"),
+		Focus:          lipgloss.Color("#1A5FB4"),
+		Dim:            lipgloss.Color("#F6F5F4"),
+		Success:        lipgloss.Color("#26A269"),
+		Warning:        lipgloss.Color("#E5A50A"),
+		Danger:         lipgloss.Color("#C01C28"),
+		ProgressFilled: lipgloss.Color("#1A5FB4"),
+		ProgressEmpty:  lipgloss.Color("#E1DEDB"),
+		GradientStart:  "#1A5FB4",
+		GradientEnd:    "#C64600",
+	}
+}
+
+// --- High Contrast Theme (WCAG AAA Accessible) ---
+type HighContrastTheme struct{}
+
+func (t HighContrastTheme) ID() string          { return "high-contrast" }
+func (t HighContrastTheme) Name() string        { return "High Contrast" }
+func (t HighContrastTheme) Description() string { return "WCAG AAA accessible stark high-contrast palette" }
+func (t HighContrastTheme) Palette() ThemePalette {
+	return ThemePalette{
+		Primary:        lipgloss.Color("#00FFFF"),
+		Secondary:      lipgloss.Color("#00FF00"),
+		Accent:         lipgloss.Color("#FFFF00"),
+		Border:         lipgloss.Color("#FFFFFF"),
+		Selected:       lipgloss.Color("#112233"),
+		Muted:          lipgloss.Color("#CCCCCC"),
+		Text:           lipgloss.Color("#FFFFFF"),
+		TextMuted:      lipgloss.Color("#EEEEEE"),
+		TextDim:        lipgloss.Color("#AAAAAA"),
+		TextOnAccent:   lipgloss.Color("#000000"),
+		Gold:           lipgloss.Color("#FFFF00"),
+		Focus:          lipgloss.Color("#00FFFF"),
+		Dim:            lipgloss.Color("#000000"),
+		Success:        lipgloss.Color("#00FF00"),
+		Warning:        lipgloss.Color("#FFFF00"),
+		Danger:         lipgloss.Color("#FF3333"),
+		ProgressFilled: lipgloss.Color("#00FFFF"),
+		ProgressEmpty:  lipgloss.Color("#333333"),
+		GradientStart:  "#00FFFF",
+		GradientEnd:    "#FFFF00",
+	}
+}
+
 var registeredThemes = []Theme{
 	ForestTheme{},
 	DraculaTheme{},
@@ -255,7 +356,15 @@ var registeredThemes = []Theme{
 	SunsetTheme{},
 	CyberpunkTheme{},
 	MonochromeTheme{},
+	SolarizedLightTheme{},
+	PaperLightTheme{},
+	HighContrastTheme{},
 	BaseTheme{},
+}
+
+// GetRegisteredThemes returns all available theme implementations.
+func GetRegisteredThemes() []Theme {
+	return registeredThemes
 }
 
 func NextThemeName(current string) string {
@@ -281,6 +390,12 @@ func resolveTheme(themeName string) Theme {
 		return ForestTheme{}
 	case "monochrome":
 		return MonochromeTheme{}
+	case "solarized-light", "solarizedlight", "solarized_light", "solarized":
+		return SolarizedLightTheme{}
+	case "paper-light", "paperlight", "paper_light", "paper":
+		return PaperLightTheme{}
+	case "high-contrast", "highcontrast", "high_contrast", "accessibility", "wcag":
+		return HighContrastTheme{}
 	case "base", "default":
 		return BaseTheme{}
 	default:
@@ -301,6 +416,7 @@ var (
 	ColorWhite          lipgloss.TerminalColor // Alias for ColorText
 	ColorText           lipgloss.TerminalColor
 	ColorTextMuted      lipgloss.TerminalColor
+	ColorTextDim        lipgloss.TerminalColor
 	ColorTextOnAccent   lipgloss.TerminalColor
 	ColorGold           lipgloss.TerminalColor
 	ColorFocus          lipgloss.TerminalColor
@@ -365,6 +481,7 @@ func ApplyTheme(themeName string) {
 	ColorWhite = p.Text
 	ColorText = p.Text
 	ColorTextMuted = p.TextMuted
+	ColorTextDim = p.TextDim
 	ColorTextOnAccent = p.TextOnAccent
 	ColorGold = p.Gold
 	ColorFocus = p.Focus
