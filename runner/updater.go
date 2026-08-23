@@ -21,6 +21,25 @@ import (
 	"github.com/BIJJUDAMA/runora/hardware"
 )
 
+type ReleaseChannel string
+
+const (
+	ChannelStable  ReleaseChannel = "stable"
+	ChannelNightly ReleaseChannel = "nightly"
+)
+
+type BackendType string
+
+const (
+	BackendAuto   BackendType = "auto"
+	BackendCUDA12 BackendType = "cuda12"
+	BackendCUDA13 BackendType = "cuda13"
+	BackendVulkan BackendType = "vulkan"
+	BackendCPU    BackendType = "cpu"
+	BackendROCm   BackendType = "rocm"
+	BackendMetal  BackendType = "metal"
+)
+
 type GithubRelease struct {
 	TagName    string         `json:"tag_name"`
 	NightlyTag string         `json:"nightly_tag,omitempty"`
@@ -91,10 +110,43 @@ func QueryLocalVersion(llamaCppDir string) (version string, commit string, build
 	return version, commit, buildInfo, nil
 }
 
-// CheckLatestRelease queries GitHub API for the latest llama.cpp release.
-// Starting with v0.2.0, llama.cpp publishes stable semantic releases (vX.Y.Z)
-// which reference the corresponding binary build tag inside nightly-tag.txt.
-func CheckLatestRelease() (*GithubRelease, error) {
+// CheckReleaseForChannel queries GitHub API for the latest llama.cpp release on the specified channel (Stable or Nightly).
+func CheckReleaseForChannel(channel ReleaseChannel) (*GithubRelease, error) {
+	if channel == ChannelNightly {
+		releases, err := fetchReleasesList("https://api.github.com/repos/ggerganov/llama.cpp/releases?per_page=15")
+		if err == nil && len(releases) > 0 {
+			// Find the most recent release with binary assets (preferring nightly 'b...' build tags)
+			for _, r := range releases {
+				hasBin := false
+				for _, a := range r.Assets {
+					nameLower := strings.ToLower(a.Name)
+					if strings.HasSuffix(nameLower, ".zip") || strings.HasSuffix(nameLower, ".tar.gz") || strings.HasSuffix(nameLower, ".tgz") {
+						if !strings.Contains(nameLower, "source") {
+							hasBin = true
+							break
+						}
+					}
+				}
+				if hasBin && strings.HasPrefix(strings.ToLower(r.TagName), "b") {
+					relCopy := r
+					return &relCopy, nil
+				}
+			}
+			// If no 'b' prefix found, return the first with binaries
+			for _, r := range releases {
+				if len(r.Assets) > 0 {
+					relCopy := r
+					return &relCopy, nil
+				}
+			}
+			return &releases[0], nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to check nightly releases: %w", err)
+		}
+	}
+
+	// ChannelStable (default)
 	rel, err := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
 	if err == nil {
 		hasBinaries := false
@@ -145,6 +197,11 @@ func CheckLatestRelease() (*GithubRelease, error) {
 		return nil, fmt.Errorf("failed to check latest release: %w", err)
 	}
 	return rel, nil
+}
+
+// CheckLatestRelease queries GitHub API for the latest llama.cpp release.
+func CheckLatestRelease() (*GithubRelease, error) {
+	return CheckReleaseForChannel(ChannelStable)
 }
 
 var (
@@ -320,10 +377,35 @@ func fetchLatestRelease(url string) (*GithubRelease, error) {
 }
 
 
-// MatchAsset finds the most suitable assets (main binaries and optional cudart DLLs) for the user's OS, CPU/GPU architecture.
+// MatchAsset finds the most suitable assets (main binaries and optional cudart DLLs) for the user's OS, CPU/GPU architecture using Auto backend detection.
 func MatchAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (mainAsset *ReleaseAsset, cudartAsset *ReleaseAsset, err error) {
+	return MatchAssetWithBackend(release, specs, BackendAuto)
+}
+
+// MatchAssetWithBackend finds the most suitable assets for the specified backend accelerator and hardware specs.
+func MatchAssetWithBackend(release *GithubRelease, specs *hardware.HardwareSpecs, backend BackendType) (mainAsset *ReleaseAsset, cudartAsset *ReleaseAsset, err error) {
 	if len(release.Assets) == 0 {
 		return nil, nil, fmt.Errorf("no assets in release")
+	}
+
+	effectiveBackend := backend
+	if effectiveBackend == "" || effectiveBackend == BackendAuto {
+		switch specs.GPU.Type {
+		case "CUDA":
+			if specs.GPU.CudaVersion == "13" {
+				effectiveBackend = BackendCUDA13
+			} else {
+				effectiveBackend = BackendCUDA12
+			}
+		case "ROCm":
+			effectiveBackend = BackendROCm
+		case "Vulkan":
+			effectiveBackend = BackendVulkan
+		case "Metal":
+			effectiveBackend = BackendMetal
+		default:
+			effectiveBackend = BackendCPU
+		}
 	}
 
 	var bestAsset *ReleaseAsset
@@ -378,33 +460,42 @@ func MatchAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (mainAsse
 		}
 
 		// 4. GPU Backend check
-		switch specs.GPU.Type {
-		case "CUDA":
+		switch effectiveBackend {
+		case BackendCUDA12:
 			if strings.Contains(nameLower, "cuda") || strings.Contains(nameLower, "cu") {
 				score += 80
-				cudaVer := specs.GPU.CudaVersion
-				if cudaVer == "" {
-					cudaVer = "12"
-				}
-				if strings.Contains(nameLower, "cu"+cudaVer) || strings.Contains(nameLower, "cuda-"+cudaVer) || strings.Contains(nameLower, "cuda"+cudaVer) {
+				if strings.Contains(nameLower, "cu12") || strings.Contains(nameLower, "cuda-12") || strings.Contains(nameLower, "cuda12") {
 					score += 50
 				}
 			} else if strings.Contains(nameLower, "llvm") || strings.Contains(nameLower, "cpu") {
 				score += 10
 			}
-		case "ROCm":
+		case BackendCUDA13:
+			if strings.Contains(nameLower, "cuda") || strings.Contains(nameLower, "cu") {
+				score += 80
+				if strings.Contains(nameLower, "cu13") || strings.Contains(nameLower, "cuda-13") || strings.Contains(nameLower, "cuda13") {
+					score += 50
+				}
+			} else if strings.Contains(nameLower, "llvm") || strings.Contains(nameLower, "cpu") {
+				score += 10
+			}
+		case BackendROCm:
 			if strings.Contains(nameLower, "rocm") {
 				score += 80
 			} else if strings.Contains(nameLower, "llvm") || strings.Contains(nameLower, "cpu") {
 				score += 10
 			}
-		case "Vulkan":
+		case BackendVulkan:
 			if strings.Contains(nameLower, "vulkan") {
 				score += 80
 			} else if strings.Contains(nameLower, "llvm") || strings.Contains(nameLower, "cpu") {
 				score += 10
 			}
-		default: // CPU
+		case BackendMetal:
+			if strings.Contains(nameLower, "macos") || strings.Contains(nameLower, "metal") {
+				score += 80
+			}
+		default: // BackendCPU
 			if strings.Contains(nameLower, "llvm") || strings.Contains(nameLower, "cpu") {
 				score += 80
 			} else if strings.Contains(nameLower, "win-llvm") || strings.Contains(nameLower, "win64") {
@@ -420,12 +511,17 @@ func MatchAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (mainAsse
 	}
 
 	if bestAsset == nil {
-		return nil, nil, fmt.Errorf("no matching asset found for OS %s and GPU type %s", specs.OS, specs.GPU.Type)
+		return nil, nil, fmt.Errorf("no matching asset found for OS %s and backend %s", specs.OS, effectiveBackend)
 	}
 
 	// 5. If Windows and CUDA, find the corresponding cudart DLLs asset
-	if strings.ToLower(specs.OS) == "windows" && specs.GPU.Type == "CUDA" {
+	if strings.ToLower(specs.OS) == "windows" && (effectiveBackend == BackendCUDA12 || effectiveBackend == BackendCUDA13) {
 		bestCudartScore := -1
+		targetCudaVer := "12"
+		if effectiveBackend == BackendCUDA13 {
+			targetCudaVer = "13"
+		}
+
 		for _, asset := range release.Assets {
 			nameLower := strings.ToLower(asset.Name)
 			if !strings.Contains(nameLower, "cudart") {
@@ -443,12 +539,8 @@ func MatchAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (mainAsse
 			}
 
 			score := 100
-			cudaVer := specs.GPU.CudaVersion
-			if cudaVer == "" {
-				cudaVer = "12"
-			}
 			thisCudaVer := extractCudaVersion(asset.Name)
-			if thisCudaVer != "" && strings.HasPrefix(thisCudaVer, cudaVer) {
+			if thisCudaVer != "" && strings.HasPrefix(thisCudaVer, targetCudaVer) {
 				score += 50
 			}
 
@@ -478,10 +570,29 @@ func CheckLatestOnnxRelease() (*GithubRelease, error) {
 	return fetchLatestRelease("https://api.github.com/repos/microsoft/onnxruntime/releases/latest")
 }
 
-// MatchOnnxAsset finds the most suitable ONNX Runtime release package.
+// MatchOnnxAsset finds the most suitable ONNX Runtime release package using Auto backend detection.
 func MatchOnnxAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (*ReleaseAsset, error) {
+	return MatchOnnxAssetWithBackend(release, specs, BackendAuto)
+}
+
+// MatchOnnxAssetWithBackend finds the most suitable ONNX Runtime release package for a specific backend.
+func MatchOnnxAssetWithBackend(release *GithubRelease, specs *hardware.HardwareSpecs, backend BackendType) (*ReleaseAsset, error) {
 	if len(release.Assets) == 0 {
 		return nil, fmt.Errorf("no assets in release")
+	}
+
+	effectiveBackend := backend
+	if effectiveBackend == "" || effectiveBackend == BackendAuto {
+		switch specs.GPU.Type {
+		case "CUDA":
+			if specs.GPU.CudaVersion == "13" {
+				effectiveBackend = BackendCUDA13
+			} else {
+				effectiveBackend = BackendCUDA12
+			}
+		default:
+			effectiveBackend = BackendCPU
+		}
 	}
 
 	var bestAsset *ReleaseAsset
@@ -534,12 +645,12 @@ func MatchOnnxAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (*Rel
 		}
 
 		// 4. GPU Backend check
-		if specs.GPU.Type == "CUDA" {
-			cudaVer := specs.GPU.CudaVersion
-			if cudaVer == "" {
-				cudaVer = "12"
+		if effectiveBackend == BackendCUDA12 || effectiveBackend == BackendCUDA13 {
+			targetCuda := "12"
+			if effectiveBackend == BackendCUDA13 {
+				targetCuda = "13"
 			}
-			if strings.Contains(nameLower, "gpu_cuda"+cudaVer) {
+			if strings.Contains(nameLower, "gpu_cuda"+targetCuda) {
 				score += 100
 			} else if strings.Contains(nameLower, "gpu_cuda") {
 				score += 50
@@ -562,7 +673,7 @@ func MatchOnnxAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (*Rel
 	}
 
 	if bestAsset == nil {
-		return nil, fmt.Errorf("no matching ONNX asset found for OS %s and GPU type %s", specs.OS, specs.GPU.Type)
+		return nil, fmt.Errorf("no matching ONNX asset found for OS %s and backend %s", specs.OS, effectiveBackend)
 	}
 
 	return bestAsset, nil
@@ -1099,4 +1210,228 @@ func copyFile(src string, dst string) error {
 
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// VersionsDir returns the path to the versions slot directory for llama.cpp.
+func VersionsDir(llamaCppDir string) string {
+	return filepath.Join(llamaCppDir, "versions")
+}
+
+// ListInstalledVersions returns a list of version tags installed under llama.cpp/versions/<tag>/.
+func ListInstalledVersions(llamaCppDir string) ([]string, error) {
+	vDir := VersionsDir(llamaCppDir)
+	entries, err := os.ReadDir(vDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	binaryName := "llama-server"
+	if runtime.GOOS == "windows" {
+		binaryName = "llama-server.exe"
+	}
+
+	var versions []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		slotPath := filepath.Join(vDir, entry.Name())
+		binPath := filepath.Join(slotPath, binaryName)
+		vTxtPath := filepath.Join(slotPath, "version.txt")
+
+		if _, err := os.Stat(binPath); err == nil {
+			versions = append(versions, entry.Name())
+		} else if _, err := os.Stat(vTxtPath); err == nil {
+			versions = append(versions, entry.Name())
+		}
+	}
+	return versions, nil
+}
+
+// GetActiveVersion returns the active version tag for llama.cpp.
+func GetActiveVersion(llamaCppDir string) (string, error) {
+	activeTxt := filepath.Join(llamaCppDir, "active_version.txt")
+	if data, err := os.ReadFile(activeTxt); err == nil {
+		tag := strings.TrimSpace(string(data))
+		if tag != "" {
+			return tag, nil
+		}
+	}
+	v, _, _, err := QueryLocalVersion(llamaCppDir)
+	return v, err
+}
+
+// SwitchActiveVersion switches the active llama.cpp installation to the specified version slot.
+func SwitchActiveVersion(llamaCppDir string, versionTag string) error {
+	versionTag = strings.TrimSpace(versionTag)
+	if versionTag == "" {
+		return fmt.Errorf("version tag cannot be empty")
+	}
+
+	slotDir := filepath.Join(VersionsDir(llamaCppDir), versionTag)
+	if _, err := os.Stat(slotDir); os.IsNotExist(err) {
+		return fmt.Errorf("version slot %s does not exist at %s", versionTag, slotDir)
+	}
+
+	// Create backup of current active binaries if present
+	backupDir := llamaCppDir + ".backup"
+	if _, err := os.Stat(llamaCppDir); err == nil {
+		_ = CreateBackup(llamaCppDir, backupDir)
+	}
+
+	// Copy files from version slot to root llama.cpp dir
+	if err := os.MkdirAll(llamaCppDir, 0755); err != nil {
+		return err
+	}
+
+	if err := copySlotToRoot(slotDir, llamaCppDir); err != nil {
+		_ = RollbackBackup(backupDir, llamaCppDir)
+		return fmt.Errorf("failed to switch active version to %s: %w", versionTag, err)
+	}
+
+	activeTxt := filepath.Join(llamaCppDir, "active_version.txt")
+	_ = os.WriteFile(activeTxt, []byte(versionTag), 0644)
+
+	return nil
+}
+
+// InstallVersionSlot extracts the release archive into llama.cpp/versions/<tag>/ and switches it to active.
+func InstallVersionSlot(archivePath string, cudartArchivePath string, llamaCppDir string, versionTag string) error {
+	versionTag = strings.TrimSpace(versionTag)
+	if versionTag == "" {
+		return fmt.Errorf("version tag cannot be empty")
+	}
+
+	slotDir := filepath.Join(VersionsDir(llamaCppDir), versionTag)
+	if err := os.MkdirAll(slotDir, 0755); err != nil {
+		return fmt.Errorf("failed to create version slot directory: %w", err)
+	}
+
+	if err := ExtractArchive(archivePath, slotDir); err != nil {
+		return fmt.Errorf("failed to extract release into version slot: %w", err)
+	}
+
+	if cudartArchivePath != "" {
+		if err := ExtractArchive(cudartArchivePath, slotDir); err != nil {
+			return fmt.Errorf("failed to extract cudart DLLs into version slot: %w", err)
+		}
+	}
+
+	versionFile := filepath.Join(slotDir, "version.txt")
+	_ = os.WriteFile(versionFile, []byte(versionTag), 0644)
+
+	return SwitchActiveVersion(llamaCppDir, versionTag)
+}
+
+// RemoveVersionSlot deletes a version directory from llama.cpp/versions/<tag>/.
+func RemoveVersionSlot(llamaCppDir string, versionTag string) error {
+	slotDir := filepath.Join(VersionsDir(llamaCppDir), versionTag)
+	if _, err := os.Stat(slotDir); os.IsNotExist(err) {
+		return nil
+	}
+	return os.RemoveAll(slotDir)
+}
+
+func copySlotToRoot(slotDir string, rootDir string) error {
+	entries, err := os.ReadDir(slotDir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == "versions" || strings.HasSuffix(entry.Name(), ".backup") {
+			continue
+		}
+		srcPath := filepath.Join(slotDir, entry.Name())
+		dstPath := filepath.Join(rootDir, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ListInstalledOnnxVersions returns a list of ONNX version slots installed under onnxruntime/versions/<tag>/.
+func ListInstalledOnnxVersions(onnxDir string) ([]string, error) {
+	vDir := filepath.Join(onnxDir, "versions")
+	entries, err := os.ReadDir(vDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	var versions []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		slotPath := filepath.Join(vDir, entry.Name())
+		vTxtPath := filepath.Join(slotPath, "version.txt")
+		if _, err := os.Stat(vTxtPath); err == nil {
+			versions = append(versions, entry.Name())
+		}
+	}
+	return versions, nil
+}
+
+// SwitchActiveOnnxVersion switches the active ONNX runtime library to the specified version slot.
+func SwitchActiveOnnxVersion(onnxDir string, versionTag string) error {
+	versionTag = strings.TrimSpace(versionTag)
+	if versionTag == "" {
+		return fmt.Errorf("version tag cannot be empty")
+	}
+
+	slotDir := filepath.Join(onnxDir, "versions", versionTag)
+	if _, err := os.Stat(slotDir); os.IsNotExist(err) {
+		return fmt.Errorf("ONNX version slot %s does not exist", versionTag)
+	}
+
+	backupDir := onnxDir + ".backup"
+	if _, err := os.Stat(onnxDir); err == nil {
+		_ = CreateBackup(onnxDir, backupDir)
+	}
+
+	if err := os.MkdirAll(onnxDir, 0755); err != nil {
+		return err
+	}
+
+	if err := copySlotToRoot(slotDir, onnxDir); err != nil {
+		_ = RollbackBackup(backupDir, onnxDir)
+		return fmt.Errorf("failed to switch active ONNX version to %s: %w", versionTag, err)
+	}
+
+	_ = os.WriteFile(filepath.Join(onnxDir, "version.txt"), []byte(versionTag), 0644)
+	return nil
+}
+
+// InstallOnnxVersionSlot extracts an ONNX archive into onnxruntime/versions/<tag>/ and activates it.
+func InstallOnnxVersionSlot(archivePath string, onnxDir string, versionTag string) error {
+	versionTag = strings.TrimSpace(versionTag)
+	if versionTag == "" {
+		return fmt.Errorf("version tag cannot be empty")
+	}
+
+	slotDir := filepath.Join(onnxDir, "versions", versionTag)
+	if err := os.MkdirAll(slotDir, 0755); err != nil {
+		return err
+	}
+
+	if err := ExtractOnnxLibrary(archivePath, slotDir); err != nil {
+		return err
+	}
+
+	_ = os.WriteFile(filepath.Join(slotDir, "version.txt"), []byte(versionTag), 0644)
+	return SwitchActiveOnnxVersion(onnxDir, versionTag)
 }

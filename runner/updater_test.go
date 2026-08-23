@@ -2,9 +2,12 @@ package runner
 
 import (
 	"archive/zip"
+	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -41,7 +44,8 @@ func TestResolveLlamaCppStableRelease(t *testing.T) {
 
 		tagRel, err := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/" + nightlyTag)
 		if err != nil {
-			t.Fatalf("failed to fetch tag release %s: %v", nightlyTag, err)
+			t.Skipf("skipping live test due to rate limit fetching tag release %s: %v", nightlyTag, err)
+			return
 		}
 		t.Logf("Tag release %s has %d assets", tagRel.TagName, len(tagRel.Assets))
 
@@ -439,5 +443,260 @@ func TestQueryLocalVersionMissing(t *testing.T) {
 	}
 }
 
-// Helper functions for copying folders under tests
-// (Already defined at package level in updater.go)
+func TestReleaseChannelsAndBackendConstants(t *testing.T) {
+	if ChannelStable != "stable" || ChannelNightly != "nightly" {
+		t.Errorf("unexpected release channel constants: stable=%s, nightly=%s", ChannelStable, ChannelNightly)
+	}
+
+	if BackendCUDA12 != "cuda12" || BackendCUDA13 != "cuda13" || BackendVulkan != "vulkan" ||
+		BackendCPU != "cpu" || BackendROCm != "rocm" || BackendMetal != "metal" || BackendAuto != "auto" {
+		t.Errorf("unexpected backend type constants")
+	}
+}
+
+func TestMatchAssetWithBackendExplicit(t *testing.T) {
+	release := &GithubRelease{
+		TagName: "b3310",
+		Name:    "llama.cpp b3310",
+		Assets: []ReleaseAsset{
+			{Name: "llama-b3310-bin-win-cu12.2.0-x64.zip", BrowserDownloadURL: "http://win-cuda-12.zip", Size: 100},
+			{Name: "llama-b3310-bin-win-cu13.0.0-x64.zip", BrowserDownloadURL: "http://win-cuda-13.zip", Size: 100},
+			{Name: "cudart-llama-bin-win-cuda-12.4-x64.zip", BrowserDownloadURL: "http://win-cudart-12.zip", Size: 50},
+			{Name: "cudart-llama-bin-win-cuda-13.3-x64.zip", BrowserDownloadURL: "http://win-cudart-13.zip", Size: 50},
+			{Name: "llama-b3310-bin-win-vulkan-x64.zip", BrowserDownloadURL: "http://win-vulkan.zip", Size: 80},
+			{Name: "llama-b3310-bin-win-llvm-x64.zip", BrowserDownloadURL: "http://win-llvm.zip", Size: 80},
+			{Name: "llama-b3310-bin-ubuntu-rocm-x64.zip", BrowserDownloadURL: "http://linux-rocm.zip", Size: 70},
+			{Name: "llama-b3310-bin-macos-arm64.zip", BrowserDownloadURL: "http://mac-arm64.zip", Size: 60},
+		},
+	}
+
+	specsWin := &hardware.HardwareSpecs{
+		OS: "Windows",
+		GPU: hardware.GPUSpecs{
+			Type: "CUDA",
+		},
+	}
+
+	// 1. Explicit CUDA 13 on Windows
+	asset, cudart, err := MatchAssetWithBackend(release, specsWin, BackendCUDA13)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(asset.Name, "win-cu13") {
+		t.Errorf("expected win-cu13 asset, got %s", asset.Name)
+	}
+	if cudart == nil || !strings.Contains(cudart.Name, "cuda-13") {
+		t.Errorf("expected cuda-13 cudart, got %+v", cudart)
+	}
+
+	// 2. Explicit Vulkan on Windows
+	asset, cudart, err = MatchAssetWithBackend(release, specsWin, BackendVulkan)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(asset.Name, "vulkan") {
+		t.Errorf("expected vulkan asset, got %s", asset.Name)
+	}
+	if cudart != nil {
+		t.Errorf("expected nil cudart for vulkan, got %s", cudart.Name)
+	}
+
+	// 3. Explicit CPU on Windows
+	asset, cudart, err = MatchAssetWithBackend(release, specsWin, BackendCPU)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(asset.Name, "win-llvm") {
+		t.Errorf("expected llvm asset, got %s", asset.Name)
+	}
+
+	// 4. Explicit ROCm on Linux
+	specsLinux := &hardware.HardwareSpecs{OS: "linux"}
+	asset, _, err = MatchAssetWithBackend(release, specsLinux, BackendROCm)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(asset.Name, "rocm") {
+		t.Errorf("expected rocm asset, got %s", asset.Name)
+	}
+
+	// 5. Explicit Metal on macOS
+	specsMac := &hardware.HardwareSpecs{OS: "darwin"}
+	asset, _, err = MatchAssetWithBackend(release, specsMac, BackendMetal)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(asset.Name, "macos") {
+		t.Errorf("expected macos asset, got %s", asset.Name)
+	}
+}
+
+func TestMatchOnnxAssetWithBackendExplicit(t *testing.T) {
+	release := &GithubRelease{
+		TagName: "v1.27.0",
+		Name:    "onnxruntime v1.27.0",
+		Assets: []ReleaseAsset{
+			{Name: "onnxruntime-win-x64-1.27.0.zip", BrowserDownloadURL: "http://win-cpu.zip", Size: 100},
+			{Name: "onnxruntime-win-x64-gpu_cuda12-1.27.0.zip", BrowserDownloadURL: "http://win-cuda12.zip", Size: 100},
+			{Name: "onnxruntime-win-x64-gpu_cuda13-1.27.0.zip", BrowserDownloadURL: "http://win-cuda13.zip", Size: 100},
+		},
+	}
+	specsWin := &hardware.HardwareSpecs{OS: "Windows"}
+
+	asset, err := MatchOnnxAssetWithBackend(release, specsWin, BackendCUDA13)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(asset.Name, "gpu_cuda13") {
+		t.Errorf("expected gpu_cuda13 asset, got %s", asset.Name)
+	}
+
+	asset, err = MatchOnnxAssetWithBackend(release, specsWin, BackendCPU)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if strings.Contains(asset.Name, "gpu") {
+		t.Errorf("expected non-gpu asset, got %s", asset.Name)
+	}
+}
+
+func TestVersionSlotsAndSwitching(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama-version-slots-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	llamaCppDir := filepath.Join(tempDir, "llama.cpp")
+	_ = os.MkdirAll(llamaCppDir, 0755)
+
+	// Helper to make a mock zip
+	makeMockZip := func(destZip string, tag string) {
+		zf, err := os.Create(destZip)
+		if err != nil {
+			t.Fatalf("failed to create zip: %v", err)
+		}
+		defer zf.Close()
+		zw := zip.NewWriter(zf)
+		binName := "llama-server"
+		if runtime.GOOS == "windows" {
+			binName = "llama-server.exe"
+		}
+		w, err := zw.Create(binName)
+		if err != nil {
+			t.Fatalf("failed to write zip entry: %v", err)
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf("mock-binary-for-%s", tag)))
+		_ = zw.Close()
+	}
+
+	zip1 := filepath.Join(tempDir, "release-b3310.zip")
+	makeMockZip(zip1, "b3310")
+
+	zip2 := filepath.Join(tempDir, "release-b10566.zip")
+	makeMockZip(zip2, "b10566")
+
+	// 1. Install Slot 1: b3310
+	err = InstallVersionSlot(zip1, "", llamaCppDir, "b3310")
+	if err != nil {
+		t.Fatalf("InstallVersionSlot b3310 failed: %v", err)
+	}
+
+	// Verify slot directory exists
+	slot1Dir := filepath.Join(llamaCppDir, "versions", "b3310")
+	if _, err := os.Stat(slot1Dir); os.IsNotExist(err) {
+		t.Fatalf("expected version slot dir %s to exist", slot1Dir)
+	}
+
+	// Verify active version is b3310
+	activeVer, err := GetActiveVersion(llamaCppDir)
+	if err != nil || activeVer != "b3310" {
+		t.Errorf("expected active version b3310, got %s (err: %v)", activeVer, err)
+	}
+
+	// 2. Install Slot 2: b10566
+	err = InstallVersionSlot(zip2, "", llamaCppDir, "b10566")
+	if err != nil {
+		t.Fatalf("InstallVersionSlot b10566 failed: %v", err)
+	}
+
+	activeVer, _ = GetActiveVersion(llamaCppDir)
+	if activeVer != "b10566" {
+		t.Errorf("expected active version b10566 after install, got %s", activeVer)
+	}
+
+	// 3. List installed versions
+	versions, err := ListInstalledVersions(llamaCppDir)
+	if err != nil {
+		t.Fatalf("ListInstalledVersions failed: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 installed versions, got %d (%+v)", len(versions), versions)
+	}
+
+	// 4. Switch active version back to b3310
+	err = SwitchActiveVersion(llamaCppDir, "b3310")
+	if err != nil {
+		t.Fatalf("SwitchActiveVersion failed: %v", err)
+	}
+	activeVer, _ = GetActiveVersion(llamaCppDir)
+	if activeVer != "b3310" {
+		t.Errorf("expected active version b3310 after switch, got %s", activeVer)
+	}
+
+	// Verify root binary contains b3310 content
+	binName := "llama-server"
+	if runtime.GOOS == "windows" {
+		binName = "llama-server.exe"
+	}
+	rootBinContent, err := os.ReadFile(filepath.Join(llamaCppDir, binName))
+	if err != nil {
+		t.Fatalf("failed to read root binary: %v", err)
+	}
+	if string(rootBinContent) != "mock-binary-for-b3310" {
+		t.Errorf("expected content %q, got %q", "mock-binary-for-b3310", string(rootBinContent))
+	}
+
+	// 5. Remove version slot b10566
+	err = RemoveVersionSlot(llamaCppDir, "b10566")
+	if err != nil {
+		t.Fatalf("RemoveVersionSlot failed: %v", err)
+	}
+	versions, _ = ListInstalledVersions(llamaCppDir)
+	if len(versions) != 1 || versions[0] != "b3310" {
+		t.Errorf("expected 1 remaining version [b3310], got %+v", versions)
+	}
+}
+
+func TestDriverWithVersionTag(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "driver-version-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	slotDir := filepath.Join(tempDir, "versions", "b9999")
+	_ = os.MkdirAll(slotDir, 0755)
+
+	binName := "llama-server"
+	if runtime.GOOS == "windows" {
+		binName = "llama-server.exe"
+	}
+	_ = os.WriteFile(filepath.Join(slotDir, binName), []byte("mock-exe"), 0755)
+
+	driver := NewLlamaCppDriver()
+	opts := StartOptions{
+		LlamaCppDir: tempDir,
+		VersionTag:  "b9999",
+		Host:        "127.0.0.1",
+		Port:        8080,
+	}
+
+	cmd, err := driver.BuildCommand(context.Background(), "test.gguf", opts, nil)
+	if err != nil {
+		t.Fatalf("driver.BuildCommand failed: %v", err)
+	}
+	if !strings.Contains(cmd.Path, filepath.Join("versions", "b9999")) {
+		t.Errorf("expected cmd path to target version slot b9999, got %s", cmd.Path)
+	}
+}
