@@ -88,6 +88,12 @@ type LifecycleModel struct {
 
 	// Selected runtime for unified controls (0: llama.cpp, 1: ONNX, 2: Runora App)
 	SelectedRuntime int
+
+	// Release Channel & Backend Accelerator selection
+	SelectedChannel   runner.ReleaseChannel
+	SelectedBackend   runner.BackendType
+	installedVersions []string
+	activeSlot        string
 }
 
 func resolveAppVersion() string {
@@ -115,18 +121,22 @@ func NewLifecycleModel(cfg *config.Config, srv runner.ModelRuntime) *LifecycleMo
 	runner.SetGitHubToken(cfg.GitHubToken)
 
 	m := &LifecycleModel{
-		srvRunner:       srv,
-		config:          cfg,
-		specs:           specs,
-		state:           StateIdle,
-		tokenInput:      ti,
-		tokenEditActive: false,
-		tokenEditTarget: "hf",
-		appVersion:      resolveAppVersion(),
-		SelectedRuntime: 0,
+		srvRunner:         srv,
+		config:            cfg,
+		specs:             specs,
+		state:             StateIdle,
+		tokenInput:        ti,
+		tokenEditActive:   false,
+		tokenEditTarget:   "hf",
+		appVersion:        resolveAppVersion(),
+		SelectedRuntime:   0,
+		SelectedChannel:   runner.ChannelStable,
+		SelectedBackend:   runner.BackendAuto,
+		installedVersions: []string{},
 	}
 	m.RefreshLocalVersion()
 	m.RefreshBackupStatus()
+	m.RefreshVersionSlots()
 	return m
 }
 
@@ -136,6 +146,82 @@ func (m *LifecycleModel) NextRuntime() {
 
 func (m *LifecycleModel) PrevRuntime() {
 	m.SelectedRuntime = (m.SelectedRuntime + 2) % 3
+}
+
+func (m *LifecycleModel) ToggleChannel() {
+	if m.SelectedChannel == runner.ChannelStable {
+		m.SelectedChannel = runner.ChannelNightly
+	} else {
+		m.SelectedChannel = runner.ChannelStable
+	}
+	m.latestTagName = ""
+	m.latestRelease = nil
+	m.actionMsg = fmt.Sprintf("Switched to %s channel. Press [C/Enter] to check.", strings.Title(string(m.SelectedChannel)))
+}
+
+func (m *LifecycleModel) CycleBackend() {
+	backends := []runner.BackendType{
+		runner.BackendAuto,
+		runner.BackendCUDA12,
+		runner.BackendCUDA13,
+		runner.BackendVulkan,
+		runner.BackendCPU,
+		runner.BackendROCm,
+		runner.BackendMetal,
+	}
+	idx := 0
+	for i, b := range backends {
+		if b == m.SelectedBackend {
+			idx = i
+			break
+		}
+	}
+	m.SelectedBackend = backends[(idx+1)%len(backends)]
+	m.actionMsg = fmt.Sprintf("Selected target backend accelerator: %s", strings.ToUpper(string(m.SelectedBackend)))
+}
+
+func (m *LifecycleModel) RefreshVersionSlots() {
+	slots, err := runner.ListInstalledVersions(m.config.Paths.LlamaCPP)
+	if err == nil {
+		m.installedVersions = slots
+	} else {
+		m.installedVersions = []string{}
+	}
+	active, _ := runner.GetActiveVersion(m.config.Paths.LlamaCPP)
+	m.activeSlot = active
+}
+
+func (m *LifecycleModel) CycleVersionSlot() error {
+	if len(m.installedVersions) == 0 {
+		return fmt.Errorf("no version slots installed in llama.cpp/versions/")
+	}
+	idx := -1
+	for i, v := range m.installedVersions {
+		if v == m.activeSlot || v == m.localVersion {
+			idx = i
+			break
+		}
+	}
+	nextIdx := (idx + 1) % len(m.installedVersions)
+	nextVer := m.installedVersions[nextIdx]
+	if nextVer == m.activeSlot && len(m.installedVersions) == 1 {
+		m.actionMsg = fmt.Sprintf("Slot %s is already active.", nextVer)
+		return nil
+	}
+
+	instances := m.srvRunner.GetAllInstances()
+	if len(instances) > 0 {
+		return fmt.Errorf("cannot switch version: active server instances are running. Stop servers first.")
+	}
+
+	err := runner.SwitchActiveVersion(m.config.Paths.LlamaCPP, nextVer)
+	if err != nil {
+		return err
+	}
+	m.RefreshLocalVersion()
+	m.RefreshVersionSlots()
+	m.actionMsg = fmt.Sprintf("Switched active llama.cpp version to %s", nextVer)
+	return nil
 }
 
 // StartAppCheck queries GitHub for the latest llama-manager release tag.
@@ -211,8 +297,9 @@ func (m *LifecycleModel) StartCheckOnly() tea.Cmd {
 	ch := make(chan updateMsg)
 
 	go func() {
-		ch <- updateMsg{target: "llamacpp", state: StateChecking, msg: "Checking for llama.cpp updates...", ch: ch}
-		release, err := runner.CheckLatestRelease()
+		channelName := strings.Title(string(m.SelectedChannel))
+		ch <- updateMsg{target: "llamacpp", state: StateChecking, msg: fmt.Sprintf("Checking for llama.cpp %s updates...", channelName), ch: ch}
+		release, err := runner.CheckReleaseForChannel(m.SelectedChannel)
 		if err != nil {
 			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to check for updates: %w", err), ch: ch}
 			return
@@ -230,7 +317,7 @@ func (m *LifecycleModel) StartCheckOnly() tea.Cmd {
 		ch <- updateMsg{
 			target:  "llamacpp",
 			state:   state,
-			msg:     fmt.Sprintf("Latest available release: %s", release.TagName),
+			msg:     fmt.Sprintf("Latest available %s release: %s", string(m.SelectedChannel), release.TagName),
 			release: release,
 			ch:      ch,
 		}
@@ -282,18 +369,18 @@ func (m *LifecycleModel) StartUpdate() tea.Cmd {
 
 		var release *runner.GithubRelease
 		var err error
-		if m.latestRelease != nil && (strings.HasPrefix(m.latestTagName, "b") || strings.Contains(strings.ToLower(m.latestTagName), "llama")) {
+		if m.latestRelease != nil && (strings.HasPrefix(m.latestTagName, "b") || strings.Contains(strings.ToLower(m.latestTagName), "llama") || strings.HasPrefix(m.latestTagName, "v")) {
 			release = m.latestRelease
 		} else {
-			ch <- updateMsg{target: "llamacpp", state: StateChecking, msg: "Checking latest llama.cpp release on GitHub...", ch: ch}
-			release, err = runner.CheckLatestRelease()
+			ch <- updateMsg{target: "llamacpp", state: StateChecking, msg: fmt.Sprintf("Checking latest llama.cpp (%s) on GitHub...", m.SelectedChannel), ch: ch}
+			release, err = runner.CheckReleaseForChannel(m.SelectedChannel)
 			if err != nil {
 				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to check release: %w", err), ch: ch}
 				return
 			}
 		}
 
-		mainAsset, cudartAsset, err := runner.MatchAsset(release, m.specs)
+		mainAsset, cudartAsset, err := runner.MatchAssetWithBackend(release, m.specs, m.SelectedBackend)
 		if err != nil {
 			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to match release asset: %w", err), ch: ch}
 			return
@@ -345,50 +432,34 @@ func (m *LifecycleModel) StartUpdate() tea.Cmd {
 			}
 		}
 
-		ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: "Creating backup of existing llama.cpp...", ch: ch}
-		backupDir := m.config.Paths.LlamaCPP + ".backup"
-
-		if _, err := os.Stat(m.config.Paths.LlamaCPP); err == nil {
-			err = runner.CreateBackup(m.config.Paths.LlamaCPP, backupDir)
-			if err != nil {
-				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to create backup: %w", err), ch: ch}
-				return
-			}
+		versionTag := release.TagName
+		if versionTag == "" {
+			versionTag = "latest"
 		}
 
-		ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: "Extracting updated binaries...", ch: ch}
-		_ = os.MkdirAll(m.config.Paths.LlamaCPP, 0755)
-		err = runner.ExtractArchive(destFile, m.config.Paths.LlamaCPP)
-		if err != nil {
-			_ = runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
-			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("extraction failed (rolled back): %w", err), ch: ch}
-			return
-		}
+		ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: fmt.Sprintf("Installing into version slot (%s)...", versionTag), ch: ch}
+
+		err = runner.InstallVersionSlot(destFile, destCudartFile, m.config.Paths.LlamaCPP, versionTag)
 		_ = os.Remove(destFile)
-
 		if destCudartFile != "" {
-			ch <- updateMsg{target: "llamacpp", state: StateExtracting, msg: "Extracting CUDA runtime DLLs...", ch: ch}
-			err = runner.ExtractArchive(destCudartFile, m.config.Paths.LlamaCPP)
-			if err != nil {
-				_ = runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
-				ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("CUDA DLLs extraction failed (rolled back): %w", err), ch: ch}
-				return
-			}
 			_ = os.Remove(destCudartFile)
+		}
+		if err != nil {
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("failed to install version slot: %w", err), ch: ch}
+			return
 		}
 
 		ch <- updateMsg{target: "llamacpp", state: StateVerifying, msg: "Verifying installation...", ch: ch}
 		version, commit, buildInfo, err := runner.QueryLocalVersion(m.config.Paths.LlamaCPP)
 		if err != nil {
-			_ = runner.RollbackBackup(backupDir, m.config.Paths.LlamaCPP)
-			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("verification failed (rolled back): %w", err), ch: ch}
+			ch <- updateMsg{target: "llamacpp", state: StateError, err: fmt.Errorf("verification failed: %w", err), ch: ch}
 			return
 		}
 
 		ch <- updateMsg{
 			target: "llamacpp",
 			state:  StateUpdateSuccess,
-			msg:    fmt.Sprintf("Update successful! Version: %s, Commit: %s (%s)", version, commit, buildInfo),
+			msg:    fmt.Sprintf("Update successful! Activated slot: %s (version: %s, commit: %s, %s)", versionTag, version, commit, buildInfo),
 			ch:     ch,
 		}
 	}()
@@ -419,7 +490,7 @@ func (m *LifecycleModel) StartOnnxUpdate() tea.Cmd {
 			}
 		}
 
-		onnxAsset, err := runner.MatchOnnxAsset(release, m.specs)
+		onnxAsset, err := runner.MatchOnnxAssetWithBackend(release, m.specs, m.SelectedBackend)
 		if err != nil {
 			ch <- updateMsg{target: "onnx", state: StateError, err: fmt.Errorf("failed to match ONNX release asset: %w", err), ch: ch}
 			return
@@ -604,6 +675,19 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "s", "S":
+			m.ToggleChannel()
+			return m, nil
+		case "b", "B":
+			m.CycleBackend()
+			return m, nil
+		case "v", "V":
+			if m.SelectedRuntime == 0 {
+				if err := m.CycleVersionSlot(); err != nil {
+					m.actionMsg = err.Error()
+				}
+			}
+			return m, nil
 		case "t", "T":
 			m.tokenEditActive = true
 			m.tokenEditTarget = "hf"
@@ -670,6 +754,7 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 		if m.state == StateUpdateSuccess || m.state == StateRollbackSuccess || m.state == StateError {
 			m.RefreshLocalVersion()
 			m.RefreshBackupStatus()
+			m.RefreshVersionSlots()
 			m.updatingRuntime = ""
 		}
 
@@ -745,9 +830,44 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else if localVerStr == "Not Installed" {
 		localVerStr = StyleDanger.Render(localVerStr)
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Version Tag:", localVerStr))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Active Version:", localVerStr))
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Commit Hash:", m.localCommit))
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Compiler/Build:", m.localBuildInfo))
+
+	// Release Channel selector
+	channelStr := ""
+	if m.SelectedChannel == runner.ChannelStable {
+		channelStr = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[●] Stable") + "   " + lipgloss.NewStyle().Foreground(ColorMuted).Render("[○] Nightly")
+	} else {
+		channelStr = lipgloss.NewStyle().Foreground(ColorMuted).Render("[○] Stable") + "   " + lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("[●] Nightly")
+	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Release Channel:", channelStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[S: Toggle]")))
+
+	// Backend selector
+	backendDisplay := strings.ToUpper(string(m.SelectedBackend))
+	if m.SelectedBackend == runner.BackendAuto {
+		detected := m.specs.GPU.Type
+		if detected == "CUDA" && m.specs.GPU.CudaVersion != "" {
+			detected += " " + m.specs.GPU.CudaVersion
+		}
+		backendDisplay = fmt.Sprintf("Auto (Detected: %s)", detected)
+	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Target Backend:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(backendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
+
+	// Version slots
+	slotsDisplay := lipgloss.NewStyle().Foreground(ColorMuted).Render("None installed in versions/")
+	if len(m.installedVersions) > 0 {
+		var slotItems []string
+		for _, s := range m.installedVersions {
+			if s == m.localVersion || s == m.activeSlot {
+				slotItems = append(slotItems, StyleSuccess.Render(s+" [Active]"))
+			} else {
+				slotItems = append(slotItems, lipgloss.NewStyle().Foreground(ColorWhite).Render(s))
+			}
+		}
+		slotsDisplay = strings.Join(slotItems, " • ")
+	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Installed Slots:", slotsDisplay, lipgloss.NewStyle().Foreground(ColorMuted).Render("[V: Switch]")))
 
 	backupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
 	if m.hasLlamaBackup {
@@ -756,11 +876,12 @@ func (m *LifecycleModel) View(width int, height int) string {
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Local Backup:", backupStr))
 
 	if m.latestTagName != "" {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName)))
+		channelLabel := strings.Title(string(m.SelectedChannel))
+		sb.WriteString(fmt.Sprintf("      %-20s %s (%s)\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName), channelLabel))
 	} else {
 		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check  •  [U/Space] Install/Update  •  [R] Rollback")))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check • [U/Space] Install/Update • [S] Channel • [B] Backend • [V] Slot • [R] Rollback")))
 	sb.WriteString("\n")
 
 	// ── 2. ONNX Runtime Library ──────────────────────────────────────────────
@@ -775,6 +896,17 @@ func (m *LifecycleModel) View(width int, height int) string {
 	}
 	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Installed Version:", onnxVerStr))
 
+	// Backend selector for ONNX
+	onnxBackendDisplay := strings.ToUpper(string(m.SelectedBackend))
+	if m.SelectedBackend == runner.BackendAuto {
+		detected := m.specs.GPU.Type
+		if detected == "CUDA" && m.specs.GPU.CudaVersion != "" {
+			detected += " " + m.specs.GPU.CudaVersion
+		}
+		onnxBackendDisplay = fmt.Sprintf("Auto (Detected: %s)", detected)
+	}
+	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Target Backend:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(onnxBackendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
+
 	onnxBackupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
 	if m.hasOnnxBackup {
 		onnxBackupStr = StyleSuccess.Render("Available (onnxruntime.backup/)")
@@ -786,7 +918,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else {
 		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check  •  [U/Space] Install/Update  •  [R] Rollback")))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check • [U/Space] Install/Update • [B] Backend • [R] Rollback")))
 	sb.WriteString("\n")
 
 	// ── 3. Runora App ────────────────────────────────────────────────────────
@@ -814,7 +946,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 	} else {
 		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check  •  [U/Space] Update App")))
+	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check • [U/Space] Update App")))
 	sb.WriteString("\n")
 
 	// ── Preferences & Hardware ───────────────────────────────────────────────
@@ -894,6 +1026,11 @@ func (m *LifecycleModel) View(width int, height int) string {
 	var helpKeys []string
 	if m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[1-3 / Tab/↑↓]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")))
+		if m.SelectedRuntime == 0 && len(m.installedVersions) > 0 {
+			helpKeys = append(helpKeys, fmt.Sprintf("%s Version Slot", StyleHelpKey.Render("[V]")))
+		}
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Check", StyleHelpKey.Render("[C/Enter]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Update/Install", StyleHelpKey.Render("[U/Space]")))
 		canRollback := (m.SelectedRuntime == 0 && m.hasLlamaBackup) || (m.SelectedRuntime == 1 && m.hasOnnxBackup)
