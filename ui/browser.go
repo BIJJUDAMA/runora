@@ -2030,16 +2030,43 @@ func (m *BrowserModel) renderFooter(width int) string {
 				fmt.Sprintf("%s Paste", StyleHelpKey.Render("[Ctrl+V]")),
 				fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")),
 			}
-		} else {
+		} else if m.lifecycleModel != nil && m.lifecycleModel.SelectedRuntime == 0 {
 			pills = []string{
-				fmt.Sprintf("%s Check Updates", StyleHelpKey.Render("[U]")),
+				fmt.Sprintf("%s Select Section", StyleHelpKey.Render("[↑/↓]")),
 				fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")),
 				fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")),
+				fmt.Sprintf("%s Check All", StyleHelpKey.Render("[U]")),
+				fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+			}
+		} else if m.lifecycleModel != nil && m.lifecycleModel.SelectedRuntime == 1 {
+			pills = []string{
+				fmt.Sprintf("%s Select Section", StyleHelpKey.Render("[↑/↓]")),
+				fmt.Sprintf("%s Update llama", StyleHelpKey.Render("[Enter/U]")),
 				fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")),
 				fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")),
 				fmt.Sprintf("%s Slot", StyleHelpKey.Render("[V]")),
 				fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")),
+				fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+			}
+		} else if m.lifecycleModel != nil && m.lifecycleModel.SelectedRuntime == 2 {
+			pills = []string{
+				fmt.Sprintf("%s Select Section", StyleHelpKey.Render("[↑/↓]")),
+				fmt.Sprintf("%s Update ONNX", StyleHelpKey.Render("[Enter/O]")),
+				fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")),
+				fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")),
+				fmt.Sprintf("%s Check All", StyleHelpKey.Render("[U]")),
+				fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
+				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
+			}
+		} else {
+			pills = []string{
+				fmt.Sprintf("%s Select Section", StyleHelpKey.Render("[↑/↓]")),
+				fmt.Sprintf("%s Self-Update", StyleHelpKey.Render("[Enter/A]")),
 				fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
+				fmt.Sprintf("%s Onboarding", StyleHelpKey.Render("[N]")),
+				fmt.Sprintf("%s Check All", StyleHelpKey.Render("[U]")),
 				fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")),
 				fmt.Sprintf("%s Quit", StyleHelpKey.Render("[Q]")),
 			}

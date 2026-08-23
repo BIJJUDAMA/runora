@@ -37,54 +37,15 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 	model.installedVersions = []string{"b3520", "b3500", "b3480"}
 	model.activeSlot = "b3520"
 
-	// 1. Standard Settings Bento Layout View
+	// 1. Standard Settings 2-Panel Inspector Layout View (Section 0: API Credentials)
 	view := model.View(100, 40)
 
-	// Verify all 4 Bento Cards are present
-	expectedCards := []struct {
-		title string
-		badge string
-	}{
-		{"API Credentials", "GitHub & Hugging Face"},
-		{"1. Engine: llama.cpp Runtime", "llama.cpp"},
-		{"2. Engine: ONNX Runtime", "ONNX"},
-		{"3. Runora System & Tools", "System"},
+	// Verify Components list and API Credentials inspector are present
+	if !strings.Contains(view, "Components") {
+		t.Errorf("expected view to contain 'Components' selector, got:\n%s", view)
 	}
-
-	for _, card := range expectedCards {
-		if !strings.Contains(view, card.title) {
-			t.Errorf("expected view to contain card title %q, got:\n%s", card.title, view)
-		}
-		if !strings.Contains(view, card.badge) {
-			t.Errorf("expected view to contain card badge %q, got:\n%s", card.badge, view)
-		}
-	}
-
-	// Verify llama.cpp card details
-	if !strings.Contains(view, "Active Version Slot:") {
-		t.Errorf("expected view to contain 'Active Version Slot:', got:\n%s", view)
-	}
-	if !strings.Contains(view, "Release Channel:") {
-		t.Errorf("expected view to contain 'Release Channel:', got:\n%s", view)
-	}
-	if !strings.Contains(view, "Stable") {
-		t.Errorf("expected view to contain 'Stable', got:\n%s", view)
-	}
-	if !strings.Contains(view, "Backend Accelerator:") {
-		t.Errorf("expected view to contain 'Backend Accelerator:', got:\n%s", view)
-	}
-	if !strings.Contains(view, "Installed Slots:") {
-		t.Errorf("expected view to contain 'Installed Slots:', got:\n%s", view)
-	}
-
-	// Verify ONNX card details
-	if !strings.Contains(view, "Installed Version:") {
-		t.Errorf("expected view to contain 'Installed Version:', got:\n%s", view)
-	}
-
-	// Verify Runora System card details
-	if !strings.Contains(view, "Runora Version:") {
-		t.Errorf("expected view to contain 'Runora Version:', got:\n%s", view)
+	if !strings.Contains(view, "API Credentials Inspector") {
+		t.Errorf("expected view to contain 'API Credentials Inspector', got:\n%s", view)
 	}
 
 	// Verify API Credentials masked tokens and actions
@@ -108,15 +69,58 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 		}
 	}
 
-	// 3. Test Token Edit Mode
+	// 3. Switch to Section 1 (llama.cpp Runtime Inspector)
+	model.SelectedRuntime = 1
+	llamaView := model.View(100, 40)
+	if !strings.Contains(llamaView, "llama.cpp Runtime Inspector") {
+		t.Errorf("expected view to contain 'llama.cpp Runtime Inspector', got:\n%s", llamaView)
+	}
+	if !strings.Contains(llamaView, "Active Version Slot:") {
+		t.Errorf("expected llama view to contain 'Active Version Slot:', got:\n%s", llamaView)
+	}
+	if !strings.Contains(llamaView, "Release Channel:") {
+		t.Errorf("expected llama view to contain 'Release Channel:', got:\n%s", llamaView)
+	}
+	if !strings.Contains(llamaView, "Stable") {
+		t.Errorf("expected llama view to contain 'Stable', got:\n%s", llamaView)
+	}
+	if !strings.Contains(llamaView, "Backend Accelerator:") {
+		t.Errorf("expected llama view to contain 'Backend Accelerator:', got:\n%s", llamaView)
+	}
+	if !strings.Contains(llamaView, "Installed Slots:") {
+		t.Errorf("expected llama view to contain 'Installed Slots:', got:\n%s", llamaView)
+	}
+
+	// 4. Switch to Section 2 (ONNX Runtime Inspector)
+	model.SelectedRuntime = 2
+	onnxView := model.View(100, 40)
+	if !strings.Contains(onnxView, "ONNX Runtime Inspector") {
+		t.Errorf("expected view to contain 'ONNX Runtime Inspector', got:\n%s", onnxView)
+	}
+	if !strings.Contains(onnxView, "Installed Version:") {
+		t.Errorf("expected onnx view to contain 'Installed Version:', got:\n%s", onnxView)
+	}
+
+	// 5. Switch to Section 3 (Runora System & Tools Inspector)
+	model.SelectedRuntime = 3
+	appView := model.View(100, 40)
+	if !strings.Contains(appView, "Runora System & Tools Inspector") {
+		t.Errorf("expected view to contain 'Runora System & Tools Inspector', got:\n%s", appView)
+	}
+	if !strings.Contains(appView, "Runora CLI Version:") {
+		t.Errorf("expected app view to contain 'Runora CLI Version:', got:\n%s", appView)
+	}
+
+	// 6. Test Token Edit Mode
 	// Enter token edit mode via key 'g'
+	model.SelectedRuntime = 0
 	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	if !model.tokenEditActive {
 		t.Fatalf("expected tokenEditActive to be true after pressing 'g'")
 	}
 	editView := model.View(100, 40)
 
-	if !strings.Contains(editView, "API Credentials") {
+	if !strings.Contains(editView, "API Credentials Inspector") {
 		t.Errorf("expected edit view to maintain API Credentials card, got:\n%s", editView)
 	}
 	if !strings.Contains(editView, "EDITING:") {

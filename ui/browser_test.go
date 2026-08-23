@@ -935,32 +935,39 @@ func TestUnifiedLifecycleNavigation(t *testing.T) {
 		t.Errorf("expected initial SelectedRuntime to be 0 (llama.cpp), got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Down to cycle to ONNX Runtime (1)
+	// Press Down to cycle to llama.cpp (1)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 	if bm.lifecycleModel.SelectedRuntime != 1 {
 		t.Errorf("expected SelectedRuntime to be 1 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Down to cycle to Runora App (2)
+	// Press Down to cycle to ONNX Runtime (2)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 	if bm.lifecycleModel.SelectedRuntime != 2 {
 		t.Errorf("expected SelectedRuntime to be 2 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Down again to wrap back to llama.cpp (0)
+	// Press Down to cycle to Runora App (3)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 3 {
+		t.Errorf("expected SelectedRuntime to be 3 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
+	// Press Down again to wrap back to API Credentials (0)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
 	if bm.lifecycleModel.SelectedRuntime != 0 {
 		t.Errorf("expected SelectedRuntime to wrap to 0, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Up arrow to move backwards to Runora App (2)
+	// Press Up arrow to move backwards to Runora App (3)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyUp})
 	bm = m.(*BrowserModel)
-	if bm.lifecycleModel.SelectedRuntime != 2 {
-		t.Errorf("expected SelectedRuntime to be 2 after Up arrow, got %d", bm.lifecycleModel.SelectedRuntime)
+	if bm.lifecycleModel.SelectedRuntime != 3 {
+		t.Errorf("expected SelectedRuntime to be 3 after Up arrow, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 }
 
