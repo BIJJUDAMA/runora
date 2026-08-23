@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/BIJJUDAMA/runora/credentials"
 )
 
 // loadWithDir loads config rooted at dir, bypassing the platform AppDataDir.
@@ -361,8 +363,12 @@ func TestConfigAPITokens(t *testing.T) {
 		}
 	})
 
-	// Test saving and loading with atomic file persistence
+	// Test saving and loading with OS Keyring and plaintext purge
 	t.Run("SaveAndLoadPersistence", func(t *testing.T) {
+		credentials.MockInit()
+		_ = credentials.Delete(credentials.ProviderGitHub)
+		_ = credentials.Delete(credentials.ProviderHuggingFace)
+
 		// Clean env vars for predictable persistence testing
 		t.Setenv("GITHUB_TOKEN", "")
 		t.Setenv("GH_TOKEN", "")
@@ -387,21 +393,31 @@ func TestConfigAPITokens(t *testing.T) {
 			t.Fatalf("failed to save config with tokens: %v", err)
 		}
 
-		// Verify on-disk file content
+		// Verify on-disk file content DOES NOT store plaintext secret tokens
 		configPath := filepath.Join(tempDir, configFileName)
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			t.Fatalf("failed to read persisted config file: %v", err)
 		}
 		jsonStr := string(data)
-		if !strings.Contains(jsonStr, `"github_token": "ghp_test_token_secret_123"`) {
-			t.Errorf("persisted config missing github_token, got:\n%s", jsonStr)
+		if strings.Contains(jsonStr, "ghp_test_token_secret_123") {
+			t.Errorf("plaintext secret leaked into config.json:\n%s", jsonStr)
 		}
-		if !strings.Contains(jsonStr, `"huggingface_token": "hf_token_secret_456"`) {
-			t.Errorf("persisted config missing huggingface_token, got:\n%s", jsonStr)
+		if strings.Contains(jsonStr, "hf_token_secret_456") {
+			t.Errorf("plaintext secret leaked into config.json:\n%s", jsonStr)
 		}
 
-		// Reload from disk and verify in-memory struct
+		// Verify tokens exist in OS keyring
+		ghInKeyring, _ := credentials.Get(credentials.ProviderGitHub)
+		if ghInKeyring != "ghp_test_token_secret_123" {
+			t.Errorf("expected GitHub token in keyring %q, got %q", "ghp_test_token_secret_123", ghInKeyring)
+		}
+		hfInKeyring, _ := credentials.Get(credentials.ProviderHuggingFace)
+		if hfInKeyring != "hf_token_secret_456" {
+			t.Errorf("expected HF token in keyring %q, got %q", "hf_token_secret_456", hfInKeyring)
+		}
+
+		// Reload from disk and verify in-memory struct is populated from keyring
 		reloaded, err := LoadFromDir(tempDir)
 		if err != nil {
 			t.Fatalf("failed to reload config: %v", err)
@@ -413,6 +429,69 @@ func TestConfigAPITokens(t *testing.T) {
 			t.Errorf("expected reloaded HuggingFaceToken %q, got %q", "hf_token_secret_456", reloaded.HuggingFaceToken)
 		}
 	})
+}
+
+func TestConfigLegacySecretMigration(t *testing.T) {
+	credentials.MockInit()
+	_ = credentials.Delete(credentials.ProviderGitHub)
+	_ = credentials.Delete(credentials.ProviderHuggingFace)
+
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("HF_TOKEN", "")
+	t.Setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+	tempDir, err := os.MkdirTemp("", "runora-migration-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	configPath := filepath.Join(tempDir, configFileName)
+	legacyJSON := `{
+  "theme": "dracula",
+  "github_token": "ghp_legacy_migrated_123",
+  "hf_token": "hf_legacy_migrated_456"
+}`
+	if err := os.WriteFile(configPath, []byte(legacyJSON), 0644); err != nil {
+		t.Fatalf("failed to write legacy config: %v", err)
+	}
+
+	// Loading must trigger migration into OS keyring and purge plaintext secrets from config.json
+	cfg, err := LoadFromDir(tempDir)
+	if err != nil {
+		t.Fatalf("LoadFromDir failed on legacy config: %v", err)
+	}
+
+	if cfg.GitHubToken != "ghp_legacy_migrated_123" {
+		t.Errorf("expected migrated GitHubToken %q, got %q", "ghp_legacy_migrated_123", cfg.GitHubToken)
+	}
+	if cfg.HuggingFaceToken != "hf_legacy_migrated_456" {
+		t.Errorf("expected migrated HuggingFaceToken %q, got %q", "hf_legacy_migrated_456", cfg.HuggingFaceToken)
+	}
+
+	// Verify tokens are in OS keyring
+	ghKeyring, _ := credentials.Get(credentials.ProviderGitHub)
+	if ghKeyring != "ghp_legacy_migrated_123" {
+		t.Errorf("keyring missing migrated GitHubToken, got %q", ghKeyring)
+	}
+	hfKeyring, _ := credentials.Get(credentials.ProviderHuggingFace)
+	if hfKeyring != "hf_legacy_migrated_456" {
+		t.Errorf("keyring missing migrated HuggingFaceToken, got %q", hfKeyring)
+	}
+
+	// Verify on-disk file was rewritten without plaintext tokens
+	purgedData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read migrated config: %v", err)
+	}
+	purgedStr := string(purgedData)
+	if strings.Contains(purgedStr, "ghp_legacy_migrated_123") || strings.Contains(purgedStr, "github_token") {
+		t.Errorf("config.json still contains plaintext github_token after migration:\n%s", purgedStr)
+	}
+	if strings.Contains(purgedStr, "hf_legacy_migrated_456") || strings.Contains(purgedStr, "hf_token") {
+		t.Errorf("config.json still contains plaintext hf_token after migration:\n%s", purgedStr)
+	}
 }
 
 func TestCorruptedConfigSelfHealingAndBackup(t *testing.T) {

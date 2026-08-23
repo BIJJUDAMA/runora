@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/BIJJUDAMA/runora/credentials"
 )
 
 // AppDataDir returns the fixed directory where runora stores all its data.
@@ -104,9 +106,9 @@ type Config struct {
 	Theme               string            `json:"theme"`
 	ModelProfiles       map[string]string `json:"model_profiles"`
 	ModelTasks          map[string]string `json:"model_tasks"`
-	HFToken             string            `json:"hf_token,omitempty"`
-	GitHubToken         string            `json:"github_token,omitempty"`
-	HuggingFaceToken    string            `json:"huggingface_token,omitempty"`
+	HFToken             string            `json:"-"`
+	GitHubToken         string            `json:"-"`
+	HuggingFaceToken    string            `json:"-"`
 	OnboardingCompleted bool              `json:"onboarding_completed"`
 
 	// configPath is the resolved path to config.json on disk.
@@ -188,6 +190,8 @@ func LoadFromDir(dir string) (*Config, error) {
 
 	var cfg *Config
 	defaults := defaultConfig(dir)
+	var needsResaveAfterMigration bool
+
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		cfg = defaultConfig(dir)
 		if err := cfg.Save(); err != nil {
@@ -207,6 +211,22 @@ func LoadFromDir(dir string) (*Config, error) {
 
 			cfg = defaultConfig(dir)
 			_ = cfg.Save()
+		} else {
+			// Check for legacy plaintext tokens in raw json and migrate to OS keyring
+			var rawMap map[string]interface{}
+			if err := json.Unmarshal(data, &rawMap); err == nil {
+				if gh, ok := rawMap["github_token"].(string); ok && strings.TrimSpace(gh) != "" {
+					_ = credentials.Set(credentials.ProviderGitHub, gh)
+					needsResaveAfterMigration = true
+				}
+				if hf, ok := rawMap["huggingface_token"].(string); ok && strings.TrimSpace(hf) != "" {
+					_ = credentials.Set(credentials.ProviderHuggingFace, hf)
+					needsResaveAfterMigration = true
+				} else if hfOld, ok := rawMap["hf_token"].(string); ok && strings.TrimSpace(hfOld) != "" {
+					_ = credentials.Set(credentials.ProviderHuggingFace, hfOld)
+					needsResaveAfterMigration = true
+				}
+			}
 		}
 	}
 
@@ -253,18 +273,26 @@ func LoadFromDir(dir string) (*Config, error) {
 	if cfg.RecentLaunches == nil {
 		cfg.RecentLaunches = []string{}
 	}
-	if cfg.GitHubToken == "" && defaults.GitHubToken != "" {
+
+	// Load active API tokens from OS Keyring (fallback to environment variables)
+	ghToken, _ := credentials.Get(credentials.ProviderGitHub)
+	if ghToken != "" {
+		cfg.GitHubToken = ghToken
+	} else if defaults.GitHubToken != "" {
 		cfg.GitHubToken = defaults.GitHubToken
 	}
-	if cfg.HuggingFaceToken == "" {
-		if defaults.HuggingFaceToken != "" {
-			cfg.HuggingFaceToken = defaults.HuggingFaceToken
-		} else if cfg.HFToken != "" {
-			cfg.HuggingFaceToken = cfg.HFToken
-		}
+
+	hfToken, _ := credentials.Get(credentials.ProviderHuggingFace)
+	if hfToken != "" {
+		cfg.HuggingFaceToken = hfToken
+		cfg.HFToken = hfToken
+	} else if defaults.HuggingFaceToken != "" {
+		cfg.HuggingFaceToken = defaults.HuggingFaceToken
+		cfg.HFToken = defaults.HuggingFaceToken
 	}
-	if cfg.HFToken == "" && cfg.HuggingFaceToken != "" {
-		cfg.HFToken = cfg.HuggingFaceToken
+
+	if needsResaveAfterMigration {
+		_ = cfg.Save()
 	}
 
 	if err := cfg.CreateDirectories(); err != nil {
@@ -288,14 +316,20 @@ func DefaultConfig() *Config {
 
 // defaultConfig returns a Config with all paths rooted at dir.
 func defaultConfig(dir string) *Config {
-	ghToken := os.Getenv("GITHUB_TOKEN")
+	ghToken, _ := credentials.Get(credentials.ProviderGitHub)
 	if ghToken == "" {
-		ghToken = os.Getenv("GH_TOKEN")
+		ghToken = os.Getenv("GITHUB_TOKEN")
+		if ghToken == "" {
+			ghToken = os.Getenv("GH_TOKEN")
+		}
 	}
 
-	hfToken := os.Getenv("HF_TOKEN")
+	hfToken, _ := credentials.Get(credentials.ProviderHuggingFace)
 	if hfToken == "" {
-		hfToken = os.Getenv("HUGGING_FACE_HUB_TOKEN")
+		hfToken = os.Getenv("HF_TOKEN")
+		if hfToken == "" {
+			hfToken = os.Getenv("HUGGING_FACE_HUB_TOKEN")
+		}
 	}
 
 	return &Config{
@@ -331,6 +365,16 @@ func (c *Config) Save() error {
 			return err
 		}
 		c.configPath = filepath.Join(dir, configFileName)
+	}
+
+	// Persist tokens securely to OS keyring
+	if c.GitHubToken != "" {
+		_ = credentials.Set(credentials.ProviderGitHub, c.GitHubToken)
+	}
+	if c.HuggingFaceToken != "" {
+		_ = credentials.Set(credentials.ProviderHuggingFace, c.HuggingFaceToken)
+	} else if c.HFToken != "" {
+		_ = credentials.Set(credentials.ProviderHuggingFace, c.HFToken)
 	}
 
 	data, err := json.MarshalIndent(c, "", "  ")

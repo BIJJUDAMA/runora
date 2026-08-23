@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/config"
+	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/runner"
 )
@@ -661,9 +662,12 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 				val := strings.TrimSpace(m.tokenInput.Value())
 				if m.tokenEditTarget == "github" {
 					m.config.GitHubToken = val
+					_ = credentials.Set(credentials.ProviderGitHub, val)
 					runner.SetGitHubToken(val)
 				} else {
 					m.config.HFToken = val
+					m.config.HuggingFaceToken = val
+					_ = credentials.Set(credentials.ProviderHuggingFace, val)
 				}
 				_ = m.config.Save()
 				m.tokenInput.Blur()

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/benchmark"
 	"github.com/BIJJUDAMA/runora/config"
+	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
@@ -560,6 +561,13 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.config.GitHubToken = ghToken
 					m.config.HFToken = hfToken
 					m.config.HuggingFaceToken = hfToken
+					if ghToken != "" {
+						_ = credentials.Set(credentials.ProviderGitHub, ghToken)
+						runner.SetGitHubToken(ghToken)
+					}
+					if hfToken != "" {
+						_ = credentials.Set(credentials.ProviderHuggingFace, hfToken)
+					}
 					if m.downloadQueue != nil {
 						m.downloadQueue.UpdateToken(hfToken)
 					}

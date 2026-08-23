@@ -10,11 +10,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/config"
+	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
 )
+
+func init() {
+	credentials.MockInit()
+}
 
 func TestBrowserModelInit(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "llama-ui-test")
@@ -667,6 +672,10 @@ func TestOnboardingWizardFlowWide(t *testing.T) {
 			_ = os.Rename("config.json.tmp", "config.json")
 		}
 	}()
+
+	credentials.MockInit()
+	_ = credentials.Delete(credentials.ProviderGitHub)
+	_ = credentials.Delete(credentials.ProviderHuggingFace)
 
 	cfg := config.DefaultConfig()
 	cfg.OnboardingCompleted = false
