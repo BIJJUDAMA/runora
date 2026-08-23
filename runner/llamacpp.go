@@ -1,228 +1,64 @@
-package runner
+﻿package runner
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
-type ServerInstance struct {
-	Port       int
-	ModelPath  string
-	PID        int
-	Cmd        *exec.Cmd
-	LaunchTime time.Time
-	LogFile    string
-	cancelFunc context.CancelFunc
-}
-
+// LlamaCppRuntime coordinates llama.cpp model execution through the ProcessSupervisor and LlamaCppDriver.
 type LlamaCppRuntime struct {
-	mu        sync.Mutex
-	logDir    string
-	instances map[int]*ServerInstance
+	supervisor *ProcessSupervisor
+	driver     *LlamaCppDriver
 }
 
 func NewLlamaCppRuntime(logDir string) *LlamaCppRuntime {
 	return &LlamaCppRuntime{
-		logDir:    logDir,
-		instances: make(map[int]*ServerInstance),
+		supervisor: NewProcessSupervisor(logDir),
+		driver:     NewLlamaCppDriver(),
+	}
+}
+
+func NewLlamaCppRuntimeWithSupervisor(supervisor *ProcessSupervisor) *LlamaCppRuntime {
+	return &LlamaCppRuntime{
+		supervisor: supervisor,
+		driver:     NewLlamaCppDriver(),
 	}
 }
 
 // Start launches the llama-server on the specified port.
 func (sr *LlamaCppRuntime) Start(modelPath string, opts StartOptions) error {
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
-	// Check if already running on this port
-	if _, exists := sr.instances[opts.Port]; exists {
-		return fmt.Errorf("a server is already running on port %d", opts.Port)
-	}
-
-	// Resolve binary name
-	binaryName := "llama-server"
-	if runtime.GOOS == "windows" {
-		binaryName = "llama-server.exe"
-	}
-	binaryPath := filepath.Join(opts.LlamaCppDir, binaryName)
-
-	// Check if binary exists
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		return fmt.Errorf("llama-server binary not found at %s", binaryPath)
-	}
-
-	// Prepare arguments
-	args := []string{
-		"--model", modelPath,
-		"--host", opts.Host,
-		"--port", fmt.Sprintf("%d", opts.Port),
-	}
-	if opts.ContextSize > 0 {
-		args = append(args, "--ctx-size", fmt.Sprintf("%d", opts.ContextSize))
-	}
-	if opts.Threads > 0 {
-		args = append(args, "--threads", fmt.Sprintf("%d", opts.Threads))
-	}
-	if opts.GPULayers >= 0 {
-		args = append(args, "--n-gpu-layers", fmt.Sprintf("%d", opts.GPULayers))
-	}
-	if opts.BatchSize > 0 {
-		args = append(args, "--batch-size", fmt.Sprintf("%d", opts.BatchSize))
-	}
-
-	// Open log file specific to this port
-	logFileName := fmt.Sprintf("llama-server-%d.log", opts.Port)
-	logFilePath := filepath.Join(sr.logDir, logFileName)
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open log file %s: %w", logFilePath, err)
-	}
-
-	// Setup context for cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-
-	// Configure system process attributes
-	configureSysProcAttr(cmd)
-
-	if err := cmd.Start(); err != nil {
-		logFile.Close()
-		cancel()
-		return fmt.Errorf("failed to start process: %w", err)
-	}
-
-	pid := 0
-	if cmd.Process != nil {
-		pid = cmd.Process.Pid
-	}
-
-	inst := &ServerInstance{
-		Port:       opts.Port,
-		ModelPath:  modelPath,
-		PID:        pid,
-		Cmd:        cmd,
-		LaunchTime: time.Now(),
-		LogFile:    logFilePath,
-		cancelFunc: cancel,
-	}
-	sr.instances[opts.Port] = inst
-
-	// Monitor termination in goroutine
-	go func(p int, lf *os.File) {
-		defer lf.Close()
-		_ = cmd.Wait()
-
-		sr.mu.Lock()
-		defer sr.mu.Unlock()
-		delete(sr.instances, p)
-	}(opts.Port, logFile)
-
-	return nil
+	_, err := sr.supervisor.StartInstance(sr.driver, modelPath, opts)
+	return err
 }
 
-// Stop terminates ALL running servers.
+// Stop terminates all running llama.cpp servers.
 func (sr *LlamaCppRuntime) Stop() error {
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
-	for port, inst := range sr.instances {
-		if inst.cancelFunc != nil {
-			inst.cancelFunc()
-		}
-		if inst.Cmd != nil && inst.Cmd.Process != nil {
-			_ = inst.Cmd.Process.Kill()
-		}
-		delete(sr.instances, port)
-	}
-	return nil
+	return sr.supervisor.Stop()
 }
 
 // StopInstance terminates the server running on the specified port.
 func (sr *LlamaCppRuntime) StopInstance(port int) error {
-	sr.mu.Lock()
-	inst, exists := sr.instances[port]
-	if !exists {
-		sr.mu.Unlock()
-		return nil
-	}
-
-	if inst.cancelFunc != nil {
-		inst.cancelFunc()
-	}
-	if inst.Cmd != nil && inst.Cmd.Process != nil {
-		_ = inst.Cmd.Process.Kill()
-	}
-	delete(sr.instances, port)
-	sr.mu.Unlock()
-
-	// Wait a brief moment for the process to terminate and release the network socket
-	time.Sleep(250 * time.Millisecond)
-	return nil
+	return sr.supervisor.StopInstance(port)
 }
 
-// GetStatus returns the status, running model path, and port of the primary running server (50505 or first found).
+// GetStatus returns the status, running model path, and port of the primary running server.
 func (sr *LlamaCppRuntime) GetStatus() (ServerStatus, string, int) {
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
-	if len(sr.instances) == 0 {
-		return StatusStopped, "", 50505
-	}
-
-	// Prefer default 50505 if running
-	if inst, exists := sr.instances[50505]; exists {
-		return StatusRunning, inst.ModelPath, 50505
-	}
-
-	// Fallback to first active one
-	for port, inst := range sr.instances {
-		return StatusRunning, inst.ModelPath, port
-	}
-
-	return StatusStopped, "", 50505
+	return sr.supervisor.GetStatus()
 }
 
 // GetAllInstances returns status information for all active servers.
 func (sr *LlamaCppRuntime) GetAllInstances() []InstanceInfo {
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
-	var list []InstanceInfo
-	for port, inst := range sr.instances {
-		pid := 0
-		if inst.Cmd != nil && inst.Cmd.Process != nil {
-			pid = inst.Cmd.Process.Pid
-		}
-		list = append(list, InstanceInfo{
-			Port:      port,
-			ModelPath: inst.ModelPath,
-			PID:       pid,
-			Uptime:    time.Since(inst.LaunchTime),
-			LogFile:   inst.LogFile,
-		})
-	}
-
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Port < list[j].Port
-	})
-	return list
+	return sr.supervisor.GetAllInstances()
 }
 
 func (sr *LlamaCppRuntime) Capabilities() []TaskType {
-	return []TaskType{TaskTextGeneration, TaskEmbedding}
+	return sr.driver.Capabilities()
 }
 
 // GetMemoryUsage queries physical memory usage (RSS) of a process in MB.
