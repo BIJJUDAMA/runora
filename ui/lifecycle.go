@@ -675,6 +675,13 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "e", "E":
+			m.tokenEditActive = true
+			m.tokenEditTarget = "hf"
+			m.tokenInput.Placeholder = "Enter HF_TOKEN (hf_...)"
+			m.tokenInput.Focus()
+			m.tokenInput.SetValue(m.config.HFToken)
+			return m, nil
 		case "s", "S":
 			m.ToggleChannel()
 			return m, nil
@@ -769,217 +776,209 @@ func maskToken(token string) string {
 	if token == "" {
 		return lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Configured")
 	}
-	if len(token) <= 10 {
+	if strings.HasPrefix(token, "ghp_") {
+		if len(token) > 8 {
+			return "ghp_***" + token[len(token)-4:]
+		}
+		return "ghp_***"
+	}
+	if strings.HasPrefix(token, "hf_") {
+		if len(token) > 7 {
+			return "hf_***" + token[len(token)-4:]
+		}
+		return "hf_***"
+	}
+	if len(token) <= 8 {
 		return "********"
 	}
-	return token[:5] + "..." + token[len(token)-5:]
+	return token[:4] + "***" + token[len(token)-4:]
 }
 
 func (m *LifecycleModel) View(width int, height int) string {
 	m.width = width
 	m.height = height
 
-	if m.tokenEditActive {
-		title := "CONFIGURE HUGGING FACE TOKEN"
-		desc1 := "Please enter or paste your Hugging Face API token (HF_TOKEN)."
-		desc2 := "This token is used for downloading gated/private models and avoiding API limits."
-		if m.tokenEditTarget == "github" {
-			title = "CONFIGURE GITHUB API TOKEN"
-			desc1 = "Please enter or paste your GitHub Personal Access Token (GITHUB_TOKEN / GH_TOKEN)."
-			desc2 = "This token increases release check rate limits from 60 to 5,000 requests per hour."
+	cardWidth := width
+	if cardWidth < 50 {
+		cardWidth = 50
+	}
+
+	activeRuntimeBadge := "llama.cpp"
+	if m.SelectedRuntime == 1 {
+		activeRuntimeBadge = "ONNX Runtime"
+	} else if m.SelectedRuntime == 2 {
+		activeRuntimeBadge = "Runora CLI"
+	}
+
+	// 1. Runtime Version & Acceleration Bento Card
+	var runtimeSB strings.Builder
+	renderRuntimeTab := func(idx int, name string) string {
+		if m.SelectedRuntime == idx {
+			return lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf("[●] %s", name))
 		}
+		return lipgloss.NewStyle().Foreground(ColorMuted).Render(fmt.Sprintf("[○] %s", name))
+	}
+	runtimeSB.WriteString(fmt.Sprintf("Runtime Target:  %s    %s    %s  %s\n\n",
+		renderRuntimeTab(0, "1. llama.cpp"),
+		renderRuntimeTab(1, "2. ONNX Runtime"),
+		renderRuntimeTab(2, "3. Runora CLI"),
+		lipgloss.NewStyle().Foreground(ColorMuted).Render("[1-3 / Tab: Switch]"),
+	))
 
-		var sb strings.Builder
-		sb.WriteString("\n")
-		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(title)))
-		sb.WriteString("  " + desc1 + "\n")
-		sb.WriteString("  " + desc2 + "\n\n")
-		sb.WriteString("  " + m.tokenInput.View() + "\n\n")
-		sb.WriteString("  " + StyleHelpKey.Render("[Enter]") + " Save Token  " + StyleHelpKey.Render("[Esc]") + " Cancel / Exit\n")
-
-		boxWidth := width - 4
-		if boxWidth < 50 {
-			boxWidth = 50
+	if m.SelectedRuntime == 0 {
+		localVerStr := m.localVersion
+		if localVerStr != "Not Installed" && localVerStr != "Unknown" {
+			localVerStr = StyleSuccess.Render(localVerStr)
+		} else if localVerStr == "Not Installed" {
+			localVerStr = StyleDanger.Render(localVerStr)
 		}
-		return lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(ColorPrimary).
-			Width(boxWidth).
-			Render(sb.String())
-	}
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Active Version Slot:", localVerStr))
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Folder Path:", m.config.Paths.LlamaCPP))
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Commit / Build:", fmt.Sprintf("%s (%s)", m.localCommit, m.localBuildInfo)))
 
-	var sb strings.Builder
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("SETTINGS & RUNTIME LIFECYCLE")))
-
-	// Helper styling for focus
-	renderHeader := func(index int, numStr, title string) string {
-		if m.SelectedRuntime == index {
-			return lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf("  ▶ [●] %s. %s (Focused)", numStr, title))
+		// Release channel
+		channelStr := ""
+		if m.SelectedChannel == runner.ChannelStable {
+			channelStr = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[●] Stable") + "   " + lipgloss.NewStyle().Foreground(ColorMuted).Render("[○] Nightly")
+		} else {
+			channelStr = lipgloss.NewStyle().Foreground(ColorMuted).Render("[○] Stable") + "   " + lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("[●] Nightly")
 		}
-		return lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("    [○] %s. %s", numStr, title))
-	}
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Release Channel:", channelStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[S: Toggle]")))
 
-	// ── 1. llama.cpp Runtime ──────────────────────────────────────────────────
-	sb.WriteString(renderHeader(0, "1", "Inference Runtime (llama.cpp)") + "\n")
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Folder Path:", m.config.Paths.LlamaCPP))
-
-	localVerStr := m.localVersion
-	if localVerStr != "Not Installed" && localVerStr != "Unknown" {
-		localVerStr = StyleSuccess.Render(localVerStr)
-	} else if localVerStr == "Not Installed" {
-		localVerStr = StyleDanger.Render(localVerStr)
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Active Version:", localVerStr))
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Commit Hash:", m.localCommit))
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Compiler/Build:", m.localBuildInfo))
-
-	// Release Channel selector
-	channelStr := ""
-	if m.SelectedChannel == runner.ChannelStable {
-		channelStr = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[●] Stable") + "   " + lipgloss.NewStyle().Foreground(ColorMuted).Render("[○] Nightly")
-	} else {
-		channelStr = lipgloss.NewStyle().Foreground(ColorMuted).Render("[○] Stable") + "   " + lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("[●] Nightly")
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Release Channel:", channelStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[S: Toggle]")))
-
-	// Backend selector
-	backendDisplay := strings.ToUpper(string(m.SelectedBackend))
-	if m.SelectedBackend == runner.BackendAuto {
-		detected := m.specs.GPU.Type
-		if detected == "CUDA" && m.specs.GPU.CudaVersion != "" {
-			detected += " " + m.specs.GPU.CudaVersion
-		}
-		backendDisplay = fmt.Sprintf("Auto (Detected: %s)", detected)
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Target Backend:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(backendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
-
-	// Version slots
-	slotsDisplay := lipgloss.NewStyle().Foreground(ColorMuted).Render("None installed in versions/")
-	if len(m.installedVersions) > 0 {
-		var slotItems []string
-		for _, s := range m.installedVersions {
-			if s == m.localVersion || s == m.activeSlot {
-				slotItems = append(slotItems, StyleSuccess.Render(s+" [Active]"))
-			} else {
-				slotItems = append(slotItems, lipgloss.NewStyle().Foreground(ColorWhite).Render(s))
+		// Backend accelerator
+		backendDisplay := strings.ToUpper(string(m.SelectedBackend))
+		if m.SelectedBackend == runner.BackendAuto {
+			detected := m.specs.GPU.Type
+			if detected == "CUDA" && m.specs.GPU.CudaVersion != "" {
+				detected += " " + m.specs.GPU.CudaVersion
 			}
+			backendDisplay = fmt.Sprintf("Auto (Detected: %s)", detected)
 		}
-		slotsDisplay = strings.Join(slotItems, " • ")
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Installed Slots:", slotsDisplay, lipgloss.NewStyle().Foreground(ColorMuted).Render("[V: Switch]")))
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Backend Accelerator:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(backendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
 
-	backupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
-	if m.hasLlamaBackup {
-		backupStr = StyleSuccess.Render("Available (llama.cpp.backup/)")
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Local Backup:", backupStr))
+		// Version slots
+		slotsDisplay := lipgloss.NewStyle().Foreground(ColorMuted).Render("None installed in versions/")
+		if len(m.installedVersions) > 0 {
+			var slotItems []string
+			for _, s := range m.installedVersions {
+				if s == m.localVersion || s == m.activeSlot {
+					slotItems = append(slotItems, StyleSuccess.Render(s+" [Active]"))
+				} else {
+					slotItems = append(slotItems, lipgloss.NewStyle().Foreground(ColorWhite).Render(s))
+				}
+			}
+			slotsDisplay = strings.Join(slotItems, " • ")
+		}
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Installed Slots:", slotsDisplay, lipgloss.NewStyle().Foreground(ColorMuted).Render("[V: Switch]")))
 
-	if m.latestTagName != "" {
-		channelLabel := strings.Title(string(m.SelectedChannel))
-		sb.WriteString(fmt.Sprintf("      %-20s %s (%s)\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName), channelLabel))
+		if m.latestTagName != "" {
+			channelLabel := strings.Title(string(m.SelectedChannel))
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s (%s)\n", "Latest Available:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.latestTagName), channelLabel))
+		} else {
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Available:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([C/Enter] to check)")))
+		}
+
+	} else if m.SelectedRuntime == 1 {
+		onnxVerStr := m.onnxLocalVersion
+		if onnxVerStr != "Not Installed" && !strings.Contains(onnxVerStr, "Unknown") {
+			onnxVerStr = StyleSuccess.Render(onnxVerStr)
+		} else if onnxVerStr == "Not Installed" {
+			onnxVerStr = StyleDanger.Render(onnxVerStr)
+		}
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Installed Version:", onnxVerStr))
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Folder Path:", m.config.Paths.OnnxRuntime))
+
+		onnxBackendDisplay := strings.ToUpper(string(m.SelectedBackend))
+		if m.SelectedBackend == runner.BackendAuto {
+			detected := m.specs.GPU.Type
+			if detected == "CUDA" && m.specs.GPU.CudaVersion != "" {
+				detected += " " + m.specs.GPU.CudaVersion
+			}
+			onnxBackendDisplay = fmt.Sprintf("Auto (Detected: %s)", detected)
+		}
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Backend Accelerator:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(onnxBackendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
+
+		if m.onnxLatestVersion != "" {
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Available:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.onnxLatestVersion)))
+		} else {
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Available:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([C/Enter] to check)")))
+		}
+
 	} else {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check • [U/Space] Install/Update • [S] Channel • [B] Backend • [V] Slot • [R] Rollback")))
-	sb.WriteString("\n")
-
-	// ── 2. ONNX Runtime Library ──────────────────────────────────────────────
-	sb.WriteString(renderHeader(1, "2", "ONNX Runtime Library") + "\n")
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Folder Path:", m.config.Paths.OnnxRuntime))
-
-	onnxVerStr := m.onnxLocalVersion
-	if onnxVerStr != "Not Installed" && !strings.Contains(onnxVerStr, "Unknown") {
-		onnxVerStr = StyleSuccess.Render(onnxVerStr)
-	} else if onnxVerStr == "Not Installed" {
-		onnxVerStr = StyleDanger.Render(onnxVerStr)
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Installed Version:", onnxVerStr))
-
-	// Backend selector for ONNX
-	onnxBackendDisplay := strings.ToUpper(string(m.SelectedBackend))
-	if m.SelectedBackend == runner.BackendAuto {
-		detected := m.specs.GPU.Type
-		if detected == "CUDA" && m.specs.GPU.CudaVersion != "" {
-			detected += " " + m.specs.GPU.CudaVersion
+		appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
+		runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Installed Version:", appVerStr))
+		if m.appChecking {
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")))
+		} else if m.appCheckErr != nil {
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", StyleDanger.Render("Check failed")))
+		} else if m.appLatestTag != "" {
+			if m.appUpdateSuccess {
+				runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
+			} else if m.appLatestTag == m.appVersion {
+				runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
+			} else {
+				runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag+" - update available")))
+			}
+		} else {
+			runtimeSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([C/Enter] to check)")))
 		}
-		onnxBackendDisplay = fmt.Sprintf("Auto (Detected: %s)", detected)
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s  %s\n", "Target Backend:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(onnxBackendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle]")))
 
+	runtimeContent := strings.TrimRight(runtimeSB.String(), "\n")
+
+	// 2. API Tokens & Credentials Bento Card
+	var tokenSB strings.Builder
+	ghTokenStr := maskToken(m.config.GitHubToken)
+	hfTokenStr := maskToken(m.config.HFToken)
+
+	if m.tokenEditActive {
+		targetName := "Hugging Face API Token (HF_TOKEN)"
+		if m.tokenEditTarget == "github" {
+			targetName = "GitHub API Token (GITHUB_TOKEN)"
+		}
+		tokenSB.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("Editing: "+targetName)))
+		tokenSB.WriteString(fmt.Sprintf("  Input: %s\n\n", m.tokenInput.View()))
+		tokenSB.WriteString(fmt.Sprintf("  Controls: %s Save  %s Cancel\n", StyleHelpKey.Render("[Enter/S]"), StyleHelpKey.Render("[Esc]")))
+	} else {
+		tokenSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "GitHub Token (ghp_***):", ghTokenStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[G / E: Edit]")))
+		tokenSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n\n", "Hugging Face (hf_***):", hfTokenStr, lipgloss.NewStyle().Foreground(ColorMuted).Render("[T / E: Edit]")))
+		tokenSB.WriteString(fmt.Sprintf("  Credentials Actions:  %s Edit  %s Save\n", StyleHelpKey.Render("[E]"), StyleHelpKey.Render("[S]")))
+	}
+	tokenContent := strings.TrimRight(tokenSB.String(), "\n")
+
+	// 3. Backup & Rollback Bento Card
+	var backupSB strings.Builder
+	llamaBackupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
+	if m.hasLlamaBackup {
+		llamaBackupStr = StyleSuccess.Render("Available (llama.cpp.backup/)")
+	}
 	onnxBackupStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not Available")
 	if m.hasOnnxBackup {
 		onnxBackupStr = StyleSuccess.Render("Available (onnxruntime.backup/)")
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Local Backup:", onnxBackupStr))
 
-	if m.onnxLatestVersion != "" {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(m.onnxLatestVersion)))
+	backupSB.WriteString(fmt.Sprintf("  %-22s %s\n", "llama.cpp Backup:", llamaBackupStr))
+	backupSB.WriteString(fmt.Sprintf("  %-22s %s\n\n", "ONNX Runtime Backup:", onnxBackupStr))
+	backupSB.WriteString("  Recovery rollbacks automatically restore the previous working executable slot on failure.\n")
+	canRollback := (m.SelectedRuntime == 0 && m.hasLlamaBackup) || (m.SelectedRuntime == 1 && m.hasOnnxBackup)
+	if canRollback {
+		backupSB.WriteString(fmt.Sprintf("  Action: %s Rollback to Previous Version\n", StyleHelpKey.Render("[R]")))
 	} else {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
+		backupSB.WriteString("  Action: No backup available for selected runtime\n")
 	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check • [U/Space] Install/Update • [B] Backend • [R] Rollback")))
-	sb.WriteString("\n")
+	backupContent := strings.TrimRight(backupSB.String(), "\n")
 
-	// ── 3. Runora App ────────────────────────────────────────────────────────
-	sb.WriteString(renderHeader(2, "3", "Runora CLI Application") + "\n")
-	appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Installed Version:", appVerStr))
-	if m.appChecking {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")))
-	} else if m.appCheckErr != nil {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", StyleDanger.Render("Check failed")))
-	} else if m.appLatestTag != "" {
-		if m.appUpdateSuccess {
-			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
-			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Status:", StyleSuccess.Render(m.appUpdateMsg)))
-		} else if m.appLatestTag == m.appVersion {
-			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", StyleSuccess.Render(m.appLatestTag+" (up-to-date)")))
-		} else {
-			sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag+" — update available")))
-			if m.appUpdating {
-				sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Status:", lipgloss.NewStyle().Foreground(ColorAccent).Render("Installing update...")))
-			} else if m.appUpdateErr != nil {
-				sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Status:", StyleDanger.Render(fmt.Sprintf("Update failed: %v", m.appUpdateErr))))
-			}
-		}
-	} else {
-		sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Latest Release:", lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked  ([C] / [Enter] to check)")))
-	}
-	sb.WriteString(fmt.Sprintf("      %-20s %s\n", "Available Actions:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[C/Enter] Check • [U/Space] Update App")))
-	sb.WriteString("\n")
+	// Assemble SurfaceCards
+	card1 := SurfaceCard("Runtime Version & Acceleration", runtimeContent, cardWidth, true, activeRuntimeBadge)
+	card2 := SurfaceCard("API Credentials", tokenContent, cardWidth, m.tokenEditActive, "GitHub / Hugging Face")
+	card3 := SurfaceCard("Backup & Rollback", backupContent, cardWidth, false, "Recovery")
 
-	// ── Preferences & Hardware ───────────────────────────────────────────────
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Preferences & Hardware:") + "\n")
-	themeStr := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(strings.Title(m.config.Theme))
-	tokenStr := maskToken(m.config.HFToken)
-	ghTokenStr := maskToken(m.config.GitHubToken)
-	onboardStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("Completed")
-	if !m.config.OnboardingCompleted {
-		onboardStr = lipgloss.NewStyle().Foreground(ColorAccent).Render("Not completed")
-	}
+	var elements []string
+	elements = append(elements, card1, card2, card3)
 
-	gpuDesc := m.specs.GPU.Type
-	if m.specs.GPU.Type == "CUDA" && m.specs.GPU.CudaVersion != "" {
-		gpuDesc += fmt.Sprintf(" (CUDA %s)", m.specs.GPU.CudaVersion)
-	}
-
-	col1Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "Color Theme:", themeStr))
-	col1Right := fmt.Sprintf("%-20s %s", "Operating System:", m.specs.OS)
-	sb.WriteString(fmt.Sprintf("%s │   %s\n", col1Left, col1Right))
-
-	col2Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "HF Token [T]:", tokenStr))
-	col2Right := fmt.Sprintf("%-20s %s", "GPU Accelerator:", gpuDesc)
-	sb.WriteString(fmt.Sprintf("%s │   %s\n", col2Left, col2Right))
-
-	col3Left := lipgloss.NewStyle().Width(38).Render(fmt.Sprintf("      %-18s %s", "GitHub Token [G]:", ghTokenStr))
-	col3Right := fmt.Sprintf("%-20s %s", "Onboarding Tour:", onboardStr)
-	sb.WriteString(fmt.Sprintf("%s │   %s\n", col3Left, col3Right))
-	sb.WriteString("\n")
-
-	// ── Runtime status ───────────────────────────────────────────────────────
+	// Status line if active
 	if m.state != StateIdle {
-		sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Status:") + "\n")
+		var statusSB strings.Builder
 		statusText := ""
 		targetName := "Inference runtime"
 		if m.updatingRuntime == "onnx" {
@@ -996,7 +995,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		case StateNoUpdate:
 			statusText = StyleSuccess.Render(fmt.Sprintf("%s is up-to-date.", targetName))
 		case StateUpdateAvailable:
-			statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(fmt.Sprintf("%s update available — press [U] or [Space] to install.", targetName))
+			statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(fmt.Sprintf("%s update available - press [U] or [Space] to install.", targetName))
 		case StateDownloading:
 			statusText = fmt.Sprintf("Downloading %s: %s", targetName, m.actionMsg)
 		case StateExtracting:
@@ -1012,47 +1011,40 @@ func (m *LifecycleModel) View(width int, height int) string {
 		case StateError:
 			statusText = StyleDanger.Render(fmt.Sprintf("Error: %v", m.err))
 		}
+
 		if statusText != "" {
-			sb.WriteString("    " + statusText + "\n")
+			statusSB.WriteString("  " + statusText + "\n")
 		}
 		if m.state == StateDownloading {
-			bar := RenderProgressBar(m.downloadProgress*100.0, width-18, ColorProgressFilled)
-			sb.WriteString(fmt.Sprintf("    %s %3.0f%%\n", bar, m.downloadProgress*100.0))
+			bar := RenderProgressBar(m.downloadProgress*100.0, max(20, width-18), ColorProgressFilled)
+			statusSB.WriteString(fmt.Sprintf("  %s %3.0f%%\n", bar, m.downloadProgress*100.0))
 		}
-		sb.WriteString("\n")
+		elements = append(elements, statusSB.String())
 	}
 
-	// ── Unified Help footer ───────────────────────────────────────────────────
+	// Help footer
 	var helpKeys []string
-	if m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[1-3 / Tab/↑↓]")))
+	if !m.tokenEditActive {
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[1-3 / Tab]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Check", StyleHelpKey.Render("[C/Enter]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Install/Update", StyleHelpKey.Render("[U/Space]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Channel", StyleHelpKey.Render("[S]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Backend", StyleHelpKey.Render("[B]")))
 		if m.SelectedRuntime == 0 && len(m.installedVersions) > 0 {
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Version Slot", StyleHelpKey.Render("[V]")))
+			helpKeys = append(helpKeys, fmt.Sprintf("%s Slot", StyleHelpKey.Render("[V]")))
 		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Check", StyleHelpKey.Render("[C/Enter]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Update/Install", StyleHelpKey.Render("[U/Space]")))
 		canRollback := (m.SelectedRuntime == 0 && m.hasLlamaBackup) || (m.SelectedRuntime == 1 && m.hasOnnxBackup)
 		if canRollback {
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")))
 		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Theme", StyleHelpKey.Render("[Y]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s HF Token", StyleHelpKey.Render("[T]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s GH Token", StyleHelpKey.Render("[G]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Reset Tour", StyleHelpKey.Render("[N]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Edit Token", StyleHelpKey.Render("[E/T/G]")))
+	} else {
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Save Token", StyleHelpKey.Render("[Enter/S]")))
+		helpKeys = append(helpKeys, fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")))
 	}
-	helpKeys = append(helpKeys, fmt.Sprintf("%s Back", StyleHelpKey.Render("[Esc]")))
 
-	sb.WriteString("  " + strings.Join(helpKeys, " │ ") + "\n")
+	elements = append(elements, "  "+strings.Join(helpKeys, " │ "))
 
-	boxWidth := width - 4
-	if boxWidth < 50 {
-		boxWidth = 50
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(ColorPrimary).
-		Width(boxWidth).
-		Render(sb.String())
+	return lipgloss.JoinVertical(lipgloss.Left, elements...)
 }
