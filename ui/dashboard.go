@@ -59,6 +59,21 @@ func (d *DashboardModel) CycleProfile(direction int) {
 	d.ActiveIdx = (d.ActiveIdx + direction + len(d.Profiles)) % len(d.Profiles)
 }
 
+func (d *DashboardModel) MoveProfile(dx, dy int) {
+	if len(d.Profiles) == 0 {
+		return
+	}
+	const colsPerRow = 5
+	newIdx := d.ActiveIdx + dx + (dy * colsPerRow)
+	if newIdx < 0 {
+		newIdx = 0
+	}
+	if newIdx >= len(d.Profiles) {
+		newIdx = len(d.Profiles) - 1
+	}
+	d.ActiveIdx = newIdx
+}
+
 func (d *DashboardModel) SetToast(msg string) {
 	d.ToastMessage = msg
 	d.ToastExpiry = time.Now().Add(4 * time.Second)
@@ -69,8 +84,27 @@ func (d *DashboardModel) GetLaunchCommand() string {
 	if p == nil || d.Model == nil {
 		return ""
 	}
-	return fmt.Sprintf("llama-server --model %s --host %s --port %d --ctx-size %d --threads %d --n-gpu-layers %d --batch-size %d",
-		d.Model.FilePath, p.Host, p.Port, p.Context, p.Threads, p.GPULayers, p.BatchSize)
+	var parts []string
+	parts = append(parts, "llama-server",
+		"--model", d.Model.FilePath,
+		"--host", p.Host,
+		"--port", fmt.Sprintf("%d", p.Port),
+		"--ctx-size", fmt.Sprintf("%d", p.Context),
+		"--threads", fmt.Sprintf("%d", p.Threads),
+		"--n-gpu-layers", fmt.Sprintf("%d", p.GPULayers),
+		"--batch-size", fmt.Sprintf("%d", p.BatchSize),
+		"--flash-attn",
+	)
+	if p.CacheTypeK != "" {
+		parts = append(parts, "--cache-type-k", p.CacheTypeK)
+	}
+	if p.CacheTypeV != "" {
+		parts = append(parts, "--cache-type-v", p.CacheTypeV)
+	}
+	if p.CustomArgs != "" {
+		parts = append(parts, p.CustomArgs)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (d *DashboardModel) CopyCommandToClipboard() error {
@@ -91,7 +125,7 @@ func (d *DashboardModel) CopyCommandToClipboard() error {
 func (d *DashboardModel) View(width int, height int) string {
 	p := d.ActiveProfile()
 	if p == nil {
-		return "No profiles found."
+		return "No profiles found. Press [P] to create a profile."
 	}
 
 	cardWidth := width
@@ -210,40 +244,78 @@ func (d *DashboardModel) View(width int, height int) string {
 	// ── Right Column: Top Card - Execution Profile ──
 	var profileContent strings.Builder
 
-	// Profile Carousel line with [<] / [>]
-	var profItems []string
-	for i, prof := range d.Profiles {
-		isDefault := profile.IsDefaultProfile(prof.Name)
-		profLabel := prof.Name
-		if !isDefault {
-			profLabel = prof.Name + "*"
-		}
-		if i == d.ActiveIdx {
-			profItems = append(profItems, lipgloss.NewStyle().
-				Background(ColorPrimary).
-				Foreground(ColorTextOnAccent).
-				Bold(true).
-				Padding(0, 1).
-				Render(profLabel))
-		} else {
-			profItems = append(profItems, lipgloss.NewStyle().
-				Foreground(ColorMuted).
-				Padding(0, 1).
-				Render(profLabel))
-		}
+	// 5-per-row grid layout (max 5 rows = 25 profiles)
+	profileContent.WriteString("  Profiles (5 per row):\n")
+	const colsPerRow = 5
+	const maxRows = 5
+	totalProfiles := len(d.Profiles)
+	if totalProfiles > colsPerRow*maxRows {
+		totalProfiles = colsPerRow * maxRows
 	}
-	carouselLine := fmt.Sprintf("  Profiles: %s %s %s\n\n",
-		StyleHelpKey.Render("[<]"),
-		strings.Join(profItems, " "),
-		StyleHelpKey.Render("[>]"),
-	)
-	profileContent.WriteString(carouselLine)
+
+	numRows := (totalProfiles + colsPerRow - 1) / colsPerRow
+	if numRows > maxRows {
+		numRows = maxRows
+	}
+
+	for row := 0; row < numRows; row++ {
+		var rowItems []string
+		for col := 0; col < colsPerRow; col++ {
+			idx := row*colsPerRow + col
+			if idx >= totalProfiles {
+				break
+			}
+			prof := d.Profiles[idx]
+			isDefault := profile.IsDefaultProfile(prof.Name)
+			profLabel := prof.Name
+			if !isDefault {
+				profLabel = prof.Name + "*"
+			}
+			if idx == d.ActiveIdx {
+				rowItems = append(rowItems, lipgloss.NewStyle().
+					Background(ColorPrimary).
+					Foreground(ColorTextOnAccent).
+					Bold(true).
+					Padding(0, 1).
+					Render(profLabel))
+			} else {
+				rowItems = append(rowItems, lipgloss.NewStyle().
+					Foreground(ColorMuted).
+					Padding(0, 1).
+					Render(profLabel))
+			}
+		}
+		profileContent.WriteString("  " + strings.Join(rowItems, " ") + "\n")
+	}
+	profileContent.WriteString("\n")
 
 	profileContent.WriteString(fmt.Sprintf("  %-18s %d tokens\n", "Context Size:", p.Context))
 	profileContent.WriteString(fmt.Sprintf("  %-18s %d threads\n", "Thread Count:", p.Threads))
 	profileContent.WriteString(fmt.Sprintf("  %-18s %d layers\n", "GPU Layers:", p.GPULayers))
-	profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "Flash Attention:", "Enabled (Auto)"))
-	profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "KV Quantization:", "FP16 (Q8_0/Q4_0/FP8 supported)"))
+
+	faStatus := "Enabled (--flash-attn)"
+	if !p.FlashAttention {
+		faStatus = "Disabled"
+	}
+	profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "Flash Attention:", faStatus))
+
+	kvStatus := "FP16"
+	if p.CacheTypeK != "" || p.CacheTypeV != "" {
+		kType := p.CacheTypeK
+		if kType == "" {
+			kType = "f16"
+		}
+		vType := p.CacheTypeV
+		if vType == "" {
+			vType = "f16"
+		}
+		kvStatus = fmt.Sprintf("K: %s, V: %s", kType, vType)
+	}
+	profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "KV Quantization:", kvStatus))
+
+	if p.CustomArgs != "" {
+		profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "Custom Flags:", p.CustomArgs))
+	}
 	profileContent.WriteString(fmt.Sprintf("  %-18s %s:%d\n", "Host / Port:", p.Host, p.Port))
 
 	activeProfileBadge := p.Name

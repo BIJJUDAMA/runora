@@ -496,7 +496,7 @@ func TestBrowserCreateCustomProfile(t *testing.T) {
 		bm = m.(*BrowserModel)
 	}
 
-	// Tab to Context size
+	// Tab to Context size (Field 1)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
 	bm = m.(*BrowserModel)
 
@@ -506,7 +506,11 @@ func TestBrowserCreateCustomProfile(t *testing.T) {
 		bm = m.(*BrowserModel)
 	}
 
-	// Tab to GPU layers
+	// Tab to Threads (Field 2)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	bm = m.(*BrowserModel)
+
+	// Tab to GPU layers (Field 3)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
 	bm = m.(*BrowserModel)
 
@@ -516,7 +520,7 @@ func TestBrowserCreateCustomProfile(t *testing.T) {
 		bm = m.(*BrowserModel)
 	}
 
-	// Tab to Port
+	// Tab to Port (Field 4)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
 	bm = m.(*BrowserModel)
 
@@ -1331,7 +1335,7 @@ func TestDashboardProfileManagementAndClipboard(t *testing.T) {
 		t.Errorf("expected duplicated profile to be in loaded profiles")
 	}
 
-	// 4. Test Deleting default profile (must fail/show toast)
+	// 4. Test Deleting default profile (now allowed: unrestricted deletion)
 	// Switch to default profile "Fast"
 	for i, p := range bm.dashboard.Profiles {
 		if p.Name == "Fast" {
@@ -1342,8 +1346,8 @@ func TestDashboardProfileManagementAndClipboard(t *testing.T) {
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	bm = m.(*BrowserModel)
 
-	if !strings.Contains(bm.dashboard.ToastMessage, "Cannot delete") {
-		t.Errorf("expected cannot delete warning toast when attempting to delete Fast profile, got %q", bm.dashboard.ToastMessage)
+	if !strings.Contains(bm.dashboard.ToastMessage, "Deleted profile 'Fast'") {
+		t.Errorf("expected deleted toast when deleting Fast profile, got %q", bm.dashboard.ToastMessage)
 	}
 
 	// 5. Test Deleting custom duplicate profile
@@ -1357,7 +1361,7 @@ func TestDashboardProfileManagementAndClipboard(t *testing.T) {
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	bm = m.(*BrowserModel)
 
-	if !strings.Contains(bm.dashboard.ToastMessage, "Deleted custom profile") {
+	if !strings.Contains(bm.dashboard.ToastMessage, "Deleted profile") {
 		t.Errorf("expected deleted toast when deleting custom profile, got %q", bm.dashboard.ToastMessage)
 	}
 }

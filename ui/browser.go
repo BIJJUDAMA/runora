@@ -369,17 +369,21 @@ type startServerMsg struct {
 	err error
 }
 
-func startServerCmd(srv runner.ModelRuntime, llamaCppDir string, modelPath string, ctxSize uint32, threads int, gpuLayers int, batchSize int, host string, port int, task runner.TaskType) tea.Cmd {
+func startServerCmd(srv runner.ModelRuntime, llamaCppDir string, modelPath string, ctxSize uint32, threads int, gpuLayers int, batchSize int, host string, port int, task runner.TaskType, flashAttn bool, cacheTypeK string, cacheTypeV string, customArgs string) tea.Cmd {
 	return func() tea.Msg {
 		err := srv.Start(modelPath, runner.StartOptions{
-			LlamaCppDir: llamaCppDir,
-			ContextSize: ctxSize,
-			Threads:     threads,
-			GPULayers:   gpuLayers,
-			BatchSize:   batchSize,
-			Host:        host,
-			Port:        port,
-			Task:        task,
+			LlamaCppDir:    llamaCppDir,
+			ContextSize:    ctxSize,
+			Threads:        threads,
+			GPULayers:      gpuLayers,
+			BatchSize:      batchSize,
+			Host:           host,
+			Port:           port,
+			Task:           task,
+			FlashAttention: flashAttn,
+			CacheTypeK:     cacheTypeK,
+			CacheTypeV:     cacheTypeV,
+			CustomArgs:     customArgs,
 		})
 		return startServerMsg{err: err}
 	}
@@ -1159,9 +1163,13 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screenMode == ScreenDashboard && m.dashboard != nil {
 			switch msg.String() {
 			case "left", "h":
-				m.dashboard.CycleProfile(-1)
+				m.dashboard.MoveProfile(-1, 0)
 			case "right", "l":
-				m.dashboard.CycleProfile(1)
+				m.dashboard.MoveProfile(1, 0)
+			case "up", "k":
+				m.dashboard.MoveProfile(0, -1)
+			case "down", "j":
+				m.dashboard.MoveProfile(0, 1)
 			case "esc":
 				m.screenMode = ScreenBrowser
 			case "c", "C":
@@ -1187,28 +1195,21 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "d", "D":
 				p := m.dashboard.ActiveProfile()
 				if p != nil {
-					if profile.IsDefaultProfile(p.Name) {
-						m.dashboard.SetToast("Cannot delete built-in default profile: " + p.Name)
+					if err := profile.DeleteProfile(m.config.Paths.Profiles, p.Name); err != nil {
+						m.dashboard.SetToast(fmt.Sprintf("Failed to delete profile: %v", err))
 						if m.toasts != nil {
-							cmds = append(cmds, m.toasts.ShowWarning("Cannot delete default profile"))
+							cmds = append(cmds, m.toasts.ShowDanger("Failed to delete profile"))
 						}
 					} else {
-						if err := profile.DeleteProfile(m.config.Paths.Profiles, p.Name); err != nil {
-							m.dashboard.SetToast(fmt.Sprintf("Failed to delete profile: %v", err))
-							if m.toasts != nil {
-								cmds = append(cmds, m.toasts.ShowDanger("Failed to delete profile"))
-							}
-						} else {
-							profs, _ := profile.LoadAll(m.config.Paths.Profiles)
-							m.profiles = profs
-							m.dashboard.Profiles = profs
-							if m.dashboard.ActiveIdx >= len(profs) {
-								m.dashboard.ActiveIdx = max(0, len(profs)-1)
-							}
-							m.dashboard.SetToast(fmt.Sprintf("✓ Deleted custom profile '%s'", p.Name))
-							if m.toasts != nil {
-								cmds = append(cmds, m.toasts.ShowSuccess(fmt.Sprintf("Deleted profile '%s'", p.Name)))
-							}
+						profs, _ := profile.LoadAll(m.config.Paths.Profiles)
+						m.profiles = profs
+						m.dashboard.Profiles = profs
+						if m.dashboard.ActiveIdx >= len(profs) {
+							m.dashboard.ActiveIdx = max(0, len(profs)-1)
+						}
+						m.dashboard.SetToast(fmt.Sprintf("✓ Deleted profile '%s'", p.Name))
+						if m.toasts != nil {
+							cmds = append(cmds, m.toasts.ShowSuccess(fmt.Sprintf("Deleted profile '%s'", p.Name)))
 						}
 					}
 				}
@@ -1248,6 +1249,10 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						p.Host,
 						launchPort,
 						taskType,
+						p.FlashAttention,
+						p.CacheTypeK,
+						p.CacheTypeV,
+						p.CustomArgs,
 					))
 					cmds = append(cmds, checkHealthCmd(launchPort))
 				}

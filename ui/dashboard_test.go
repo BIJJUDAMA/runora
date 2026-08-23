@@ -107,8 +107,8 @@ func TestDualColumnBentoDashboardLayout(t *testing.T) {
 	if !strings.Contains(rendered, "Balanced") {
 		t.Errorf("expected right top card to display active profile badge 'Balanced', got:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "[<]") || !strings.Contains(rendered, "[>]") {
-		t.Errorf("expected right top card to display carousel navigation '[<]' and '[>]', got:\n%s", rendered)
+	if !strings.Contains(rendered, "Profiles (5 per row):") {
+		t.Errorf("expected right top card to display 'Profiles (5 per row):', got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "Context Size:") || !strings.Contains(rendered, "4096 tokens") {
 		t.Errorf("expected right top card to display Context Size '4096 tokens', got:\n%s", rendered)
@@ -122,8 +122,8 @@ func TestDualColumnBentoDashboardLayout(t *testing.T) {
 	if !strings.Contains(rendered, "Flash Attention:") {
 		t.Errorf("expected right top card to display 'Flash Attention:', got:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "KV Quantization:") || !strings.Contains(rendered, "Q8_0/Q4_0/FP8") {
-		t.Errorf("expected right top card to display 'KV Quantization:' mentioning Q8_0/Q4_0/FP8, got:\n%s", rendered)
+	if !strings.Contains(rendered, "KV Quantization:") {
+		t.Errorf("expected right top card to display 'KV Quantization:', got:\n%s", rendered)
 	}
 
 	// 5. Verify Right Column Bottom Card: "Launch Command Preview"
@@ -135,6 +135,9 @@ func TestDualColumnBentoDashboardLayout(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "llama-server") || !strings.Contains(rendered, "--model") {
 		t.Errorf("expected right bottom card to render generated llama-server command, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "--flash-attn") {
+		t.Errorf("expected launch command to include '--flash-attn', got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "[C]") || !strings.Contains(rendered, "Copy to clipboard") {
 		t.Errorf("expected right bottom card to display '[C] Copy to clipboard' hint, got:\n%s", rendered)
@@ -153,37 +156,62 @@ func TestDualColumnBentoDashboardLayout(t *testing.T) {
 	}
 }
 
-func TestDashboardModel_CycleProfiles(t *testing.T) {
+func TestDashboardModel_CycleAndMoveProfiles(t *testing.T) {
 	meta, specs, profiles := createTestModelAndSpecs()
-	dashboard := NewDashboardModel(meta, specs, profiles, "Fast")
+	// Add 6 custom profiles so we have 11 profiles total (3 rows in a 5-per-row grid)
+	for i := 1; i <= 6; i++ {
+		profiles = append(profiles, &profile.Profile{
+			Name:           "Custom-" + string(rune('A'+i-1)),
+			Context:        4096,
+			Threads:        4,
+			GPULayers:      50,
+			Port:           50505 + i,
+			FlashAttention: true,
+		})
+	}
 
+	dashboard := NewDashboardModel(meta, specs, profiles, "Fast")
 	if dashboard.ActiveProfile().Name != "Fast" {
 		t.Fatalf("expected initial profile to be 'Fast', got %s", dashboard.ActiveProfile().Name)
 	}
 
-	// Cycle forward
-	dashboard.CycleProfile(1)
+	// Move right horizontally
+	dashboard.MoveProfile(1, 0)
 	if dashboard.ActiveProfile().Name != "Balanced" {
-		t.Errorf("expected active profile after cycle +1 to be 'Balanced', got %s", dashboard.ActiveProfile().Name)
+		t.Errorf("expected active profile after +1 horizontal move to be 'Balanced', got %s", dashboard.ActiveProfile().Name)
 	}
 
-	// Cycle backward
-	dashboard.CycleProfile(-1)
-	if dashboard.ActiveProfile().Name != "Fast" {
-		t.Errorf("expected active profile after cycle -1 to be 'Fast', got %s", dashboard.ActiveProfile().Name)
+	// Move down vertically (jump 5 columns to row 2)
+	dashboard.MoveProfile(0, 1) // 1 + 5 = index 6 ("Custom-B")
+	if dashboard.ActiveProfile().Name != "Custom-B" {
+		t.Errorf("expected active profile after +1 vertical row move to be 'Custom-B', got %s", dashboard.ActiveProfile().Name)
 	}
 
-	// Cycle backward wrap-around
-	dashboard.CycleProfile(-1)
-	expectedLast := profiles[len(profiles)-1].Name
-	if dashboard.ActiveProfile().Name != expectedLast {
-		t.Errorf("expected wrap-around cycle -1 to be %q, got %s", expectedLast, dashboard.ActiveProfile().Name)
+	// Move up vertically (jump back 5 columns to row 1)
+	dashboard.MoveProfile(0, -1)
+	if dashboard.ActiveProfile().Name != "Balanced" {
+		t.Errorf("expected active profile after -1 vertical row move to be 'Balanced', got %s", dashboard.ActiveProfile().Name)
 	}
 }
 
 func TestDashboardModel_GetLaunchCommand(t *testing.T) {
 	meta, specs, profiles := createTestModelAndSpecs()
-	dashboard := NewDashboardModel(meta, specs, profiles, "High")
+	// Add custom profile with KV quantization and custom raw arguments
+	profiles = append(profiles, &profile.Profile{
+		Name:           "Ultra Fast Q8",
+		Context:        8192,
+		Threads:        8,
+		GPULayers:      999,
+		BatchSize:      512,
+		Host:           "127.0.0.1",
+		Port:           50505,
+		FlashAttention: true,
+		CacheTypeK:     "q8_0",
+		CacheTypeV:     "q8_0",
+		CustomArgs:     "--temp 0.7 --top-p 0.9",
+	})
+
+	dashboard := NewDashboardModel(meta, specs, profiles, "Ultra Fast Q8")
 
 	cmd := dashboard.GetLaunchCommand()
 	expectedSubstrings := []string{
@@ -192,9 +220,13 @@ func TestDashboardModel_GetLaunchCommand(t *testing.T) {
 		"--host 127.0.0.1",
 		"--port 50505",
 		"--ctx-size 8192",
-		"--threads",
+		"--threads 8",
 		"--n-gpu-layers 999",
 		"--batch-size 512",
+		"--flash-attn",
+		"--cache-type-k q8_0",
+		"--cache-type-v q8_0",
+		"--temp 0.7 --top-p 0.9",
 	}
 
 	for _, sub := range expectedSubstrings {
