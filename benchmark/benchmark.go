@@ -16,15 +16,23 @@ import (
 	"github.com/BIJJUDAMA/runora/runner"
 )
 
+type MemoryBreakdown struct {
+	HostRSSBytes uint64 `json:"host_rss_bytes"`
+	GPUDedicated uint64 `json:"gpu_dedicated"`
+}
+
 type BenchmarkResult struct {
-	ModelPath        string    `json:"model_path"`
-	ModelName        string    `json:"model_name"`
-	RunDate          time.Time `json:"run_date"`
-	StartupTimeMs    int64     `json:"startup_time_ms"`
-	TokensPerSec     float64   `json:"tokens_per_sec"`
-	PeakTokensPerSec float64   `json:"peak_tokens_per_sec"`
-	RAMUsageMB       float64   `json:"ram_usage_mb"`
-	VRAMUsageMB      float64   `json:"vram_usage_mb"`
+	ModelPath          string          `json:"model_path"`
+	ModelName          string          `json:"model_name"`
+	RunDate            time.Time       `json:"run_date"`
+	StartupTimeMs      int64           `json:"startup_time_ms"`
+	PromptTokensPerSec float64         `json:"prompt_tokens_per_sec,omitempty"`
+	TokensPerSec       float64         `json:"tokens_per_sec"`
+	PeakTokensPerSec   float64         `json:"peak_tokens_per_sec"`
+	TTFTMs             float64         `json:"ttft_ms,omitempty"`
+	RAMUsageMB         float64         `json:"ram_usage_mb"`
+	VRAMUsageMB        float64         `json:"vram_usage_mb"`
+	MemoryBreakdown    MemoryBreakdown `json:"memory_breakdown"`
 }
 
 type LlamaTimings struct {
@@ -127,6 +135,17 @@ func RunBenchmark(llamaCppDir string, m *model.GGUFMetadata, specs *hardware.Har
 		return nil, fmt.Errorf("failed to unmarshal timings: %w", err)
 	}
 
+	// Query physical memory usage (RSS) of running server before terminating
+	var hostRSSBytes uint64
+	for _, inst := range benchRunner.GetAllInstances() {
+		if inst.Port == port && inst.PID > 0 {
+			if memMB, memErr := runner.GetMemoryUsage(inst.PID); memErr == nil && memMB > 0 {
+				hostRSSBytes = uint64(memMB * 1024 * 1024)
+			}
+			break
+		}
+	}
+
 	// Terminate server
 	_ = benchRunner.Stop()
 
@@ -134,30 +153,68 @@ func RunBenchmark(llamaCppDir string, m *model.GGUFMetadata, specs *hardware.Har
 		onStep(2) // StepSavingData
 	}
 
-	// Calculate speed
+	// Decouple TTFT (Prompt processing speed & latency) from Generation speed
+	promptTokensPerSec := compResp.Timings.PromptPerSecond
+	if promptTokensPerSec == 0 && compResp.Timings.PromptN > 0 && compResp.Timings.PromptMs > 0 {
+		promptTokensPerSec = float64(compResp.Timings.PromptN) / (compResp.Timings.PromptMs / 1000.0)
+	}
+	ttftMs := compResp.Timings.PromptMs
+
+	// Calculate generation speed using pure decode duration
 	tokensPerSec := compResp.Timings.PredictedPerSecond
 	if tokensPerSec == 0 && compResp.Timings.PredictedN > 0 {
-		duration := time.Since(compStart).Seconds()
-		tokensPerSec = float64(compResp.Timings.PredictedN) / duration
+		if compResp.Timings.PredictedMs > 0 {
+			tokensPerSec = float64(compResp.Timings.PredictedN) / (compResp.Timings.PredictedMs / 1000.0)
+		} else {
+			duration := time.Since(compStart).Seconds()
+			if ttftMs > 0 {
+				decodeSec := duration - (ttftMs / 1000.0)
+				if decodeSec > 0 {
+					tokensPerSec = float64(compResp.Timings.PredictedN) / decodeSec
+				}
+			}
+			if tokensPerSec == 0 && duration > 0 {
+				tokensPerSec = float64(compResp.Timings.PredictedN) / duration
+			}
+		}
 	}
 
 	// Estimate RAM and VRAM footprint at 512 context size
 	var ramEst, vramEst float64 = 0, 0
+	var gpuDedicated uint64 = 0
 	if specs != nil {
 		est := hardware.EstimateMemory(m, specs, 512)
-		ramEst = float64(est.TotalMemory) / (1024 * 1024)  // MB
-		vramEst = float64(est.KVCacheSize) / (1024 * 1024) // MB
+		ramEst = float64(est.TotalMemory) / (1024 * 1024) // MB
+		vramUsage := est.WeightSize * uint64(est.GPUOffloadPct) / 100
+		if est.GPUOffloadPct > 0 {
+			vramUsage += est.KVCacheSize + est.Overhead
+		}
+		gpuDedicated = vramUsage
+		vramEst = float64(vramUsage) / (1024 * 1024) // MB
+	}
+
+	if hostRSSBytes == 0 && ramEst > 0 {
+		hostRSSBytes = uint64(ramEst * 1024 * 1024)
+	}
+	if hostRSSBytes > 0 {
+		ramEst = float64(hostRSSBytes) / (1024 * 1024)
 	}
 
 	result := &BenchmarkResult{
-		ModelPath:        m.FilePath,
-		ModelName:        m.Name,
-		RunDate:          time.Now(),
-		StartupTimeMs:    startupTimeMs,
-		TokensPerSec:     tokensPerSec,
-		PeakTokensPerSec: tokensPerSec * 1.05, // estimated peak
-		RAMUsageMB:       ramEst,
-		VRAMUsageMB:      vramEst,
+		ModelPath:          m.FilePath,
+		ModelName:          m.Name,
+		RunDate:            time.Now(),
+		StartupTimeMs:      startupTimeMs,
+		PromptTokensPerSec: promptTokensPerSec,
+		TokensPerSec:       tokensPerSec,
+		PeakTokensPerSec:   tokensPerSec,
+		TTFTMs:             ttftMs,
+		RAMUsageMB:         ramEst,
+		VRAMUsageMB:        vramEst,
+		MemoryBreakdown: MemoryBreakdown{
+			HostRSSBytes: hostRSSBytes,
+			GPUDedicated: gpuDedicated,
+		},
 	}
 
 	return result, nil
@@ -200,5 +257,5 @@ func SaveResult(benchmarksDir string, res *BenchmarkResult) error {
 	}
 
 	historyFile := filepath.Join(benchmarksDir, "history.json")
-	return os.WriteFile(historyFile, data, 0644)
+	return config.AtomicWriteFile(historyFile, data, 0644)
 }

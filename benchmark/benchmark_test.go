@@ -16,14 +16,20 @@ func TestBenchmarkDatabase(t *testing.T) {
 
 	// Save benchmark result
 	res := &BenchmarkResult{
-		ModelPath:        "models/test.gguf",
-		ModelName:        "Test Model",
-		RunDate:          time.Now(),
-		StartupTimeMs:    1200,
-		TokensPerSec:     45.2,
-		PeakTokensPerSec: 48.0,
-		RAMUsageMB:       2048.5,
-		VRAMUsageMB:      512.0,
+		ModelPath:          "models/test.gguf",
+		ModelName:          "Test Model",
+		RunDate:            time.Now(),
+		StartupTimeMs:      1200,
+		PromptTokensPerSec: 150.5,
+		TokensPerSec:       45.2,
+		PeakTokensPerSec:   48.0,
+		TTFTMs:             105.2,
+		RAMUsageMB:         2048.5,
+		VRAMUsageMB:        512.0,
+		MemoryBreakdown: MemoryBreakdown{
+			HostRSSBytes: 2048 * 1024 * 1024,
+			GPUDedicated: 512 * 1024 * 1024,
+		},
 	}
 
 	err = SaveResult(tempDir, res)
@@ -50,5 +56,11 @@ func TestBenchmarkDatabase(t *testing.T) {
 	loaded := history[0]
 	if loaded.ModelName != "Test Model" || loaded.TokensPerSec != 45.2 || loaded.StartupTimeMs != 1200 {
 		t.Errorf("loaded data mismatch: %+v", loaded)
+	}
+	if loaded.PromptTokensPerSec != 150.5 || loaded.TTFTMs != 105.2 {
+		t.Errorf("loaded decoupled prompt metrics mismatch: %+v", loaded)
+	}
+	if loaded.MemoryBreakdown.HostRSSBytes != 2048*1024*1024 || loaded.MemoryBreakdown.GPUDedicated != 512*1024*1024 {
+		t.Errorf("loaded memory breakdown mismatch: %+v", loaded.MemoryBreakdown)
 	}
 }
