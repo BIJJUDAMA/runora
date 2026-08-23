@@ -1,12 +1,21 @@
 package model
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+)
+
+const (
+	MaxKVCount        uint64 = 10_000
+	MaxTensorCount    uint64 = 100_000
+	MaxStringLength   uint64 = 16 * 1024 * 1024 // 16MB
+	MaxArrayLength    uint64 = 1_000_000
+	MaxRecursionDepth int    = 4
 )
 
 type GGUFMetadata struct {
@@ -50,6 +59,7 @@ const (
 type GGUFReader struct {
 	r       io.Reader
 	version uint32
+	depth   int
 	err     error
 }
 
@@ -74,6 +84,10 @@ func (gr *GGUFReader) readUint() uint64 {
 func (gr *GGUFReader) readString() string {
 	length := gr.readUint()
 	if gr.err != nil {
+		return ""
+	}
+	if length > MaxStringLength {
+		gr.err = fmt.Errorf("gguf string length %d exceeds max limit %d", length, MaxStringLength)
 		return ""
 	}
 	buf := make([]byte, length)
@@ -124,16 +138,32 @@ func (gr *GGUFReader) parseValue(valType ValueType) interface{} {
 	case TypeString:
 		return gr.readString()
 	case TypeArray:
+		if gr.depth >= MaxRecursionDepth {
+			gr.err = fmt.Errorf("max recursion depth %d exceeded while parsing array", MaxRecursionDepth)
+			return nil
+		}
+		gr.depth++
 		var elemType uint32
 		gr.read(&elemType)
 		lenVal := gr.readUint()
 		if gr.err != nil {
+			gr.depth--
+			return nil
+		}
+		if lenVal > MaxArrayLength {
+			gr.err = fmt.Errorf("gguf array length %d exceeds max limit %d", lenVal, MaxArrayLength)
+			gr.depth--
 			return nil
 		}
 		arr := make([]interface{}, lenVal)
 		for i := uint64(0); i < lenVal; i++ {
+			if gr.err != nil {
+				gr.depth--
+				return nil
+			}
 			arr[i] = gr.parseValue(ValueType(elemType))
 		}
+		gr.depth--
 		return arr
 	case TypeUInt64:
 		var v uint64
@@ -166,9 +196,11 @@ func ParseGGUF(filePath string) (*GGUFMetadata, error) {
 		return nil, err
 	}
 
+	br := bufio.NewReaderSize(file, 64*1024)
+
 	// GGUF magic is 'G' 'G' 'U' 'F' (0x46554747)
 	var magic [4]byte
-	if _, err := io.ReadFull(file, magic[:]); err != nil {
+	if _, err := io.ReadFull(br, magic[:]); err != nil {
 		return nil, fmt.Errorf("failed to read magic bytes: %w", err)
 	}
 	if string(magic[:]) != "GGUF" {
@@ -176,7 +208,7 @@ func ParseGGUF(filePath string) (*GGUFMetadata, error) {
 	}
 
 	var version uint32
-	if err := binary.Read(file, binary.LittleEndian, &version); err != nil {
+	if err := binary.Read(br, binary.LittleEndian, &version); err != nil {
 		return nil, fmt.Errorf("failed to read version: %w", err)
 	}
 
@@ -185,7 +217,7 @@ func ParseGGUF(filePath string) (*GGUFMetadata, error) {
 	}
 
 	gr := &GGUFReader{
-		r:       file,
+		r:       br,
 		version: version,
 	}
 
@@ -194,6 +226,13 @@ func ParseGGUF(filePath string) (*GGUFMetadata, error) {
 	kvCount := gr.readUint()
 	if gr.err != nil {
 		return nil, fmt.Errorf("failed to read counts: %w", gr.err)
+	}
+
+	if kvCount > MaxKVCount {
+		return nil, fmt.Errorf("gguf kv count %d exceeds safety limit %d", kvCount, MaxKVCount)
+	}
+	if tensorCount > MaxTensorCount {
+		return nil, fmt.Errorf("gguf tensor count %d exceeds safety limit %d", tensorCount, MaxTensorCount)
 	}
 
 	meta := &GGUFMetadata{

@@ -185,3 +185,178 @@ func TestParseGGUFWithArray(t *testing.T) {
 		t.Errorf("expected headsKV to be averaged to 7, got %d", meta.HeadsKV)
 	}
 }
+
+func TestParseGGUF_ExceedsMaxKVCount(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "gguf-max-kv-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	var buf bytes.Buffer
+	_, _ = buf.Write([]byte("GGUF"))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(3))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(0))          // Tensor count
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(MaxKVCount+1)) // Exceeds MaxKVCount
+
+	_, _ = tempFile.Write(buf.Bytes())
+	_ = tempFile.Close()
+
+	_, err = ParseGGUF(tempFile.Name())
+	if err == nil {
+		t.Fatalf("expected error when kvCount exceeds MaxKVCount, got nil")
+	}
+}
+
+func TestParseGGUF_ExceedsMaxTensorCount(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "gguf-max-tensor-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	var buf bytes.Buffer
+	_, _ = buf.Write([]byte("GGUF"))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(3))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(MaxTensorCount+1)) // Exceeds MaxTensorCount
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+
+	_, _ = tempFile.Write(buf.Bytes())
+	_ = tempFile.Close()
+
+	_, err = ParseGGUF(tempFile.Name())
+	if err == nil {
+		t.Fatalf("expected error when tensorCount exceeds MaxTensorCount, got nil")
+	}
+}
+
+func TestParseGGUF_ExceedsMaxStringLength(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "gguf-max-str-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	var buf bytes.Buffer
+	_, _ = buf.Write([]byte("GGUF"))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(3))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+
+	// Write oversized string length
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(MaxStringLength+1))
+
+	_, _ = tempFile.Write(buf.Bytes())
+	_ = tempFile.Close()
+
+	_, err = ParseGGUF(tempFile.Name())
+	if err == nil {
+		t.Fatalf("expected error when string length exceeds MaxStringLength, got nil")
+	}
+}
+
+func TestParseGGUF_ExceedsMaxArrayLength(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "gguf-max-arr-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	var buf bytes.Buffer
+	_, _ = buf.Write([]byte("GGUF"))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(3))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+
+	// KV 1: array key
+	writeGGUFString(&buf, "some.array")
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeArray))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeUInt32))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(MaxArrayLength+1)) // Exceeds MaxArrayLength
+
+	_, _ = tempFile.Write(buf.Bytes())
+	_ = tempFile.Close()
+
+	_, err = ParseGGUF(tempFile.Name())
+	if err == nil {
+		t.Fatalf("expected error when array length exceeds MaxArrayLength, got nil")
+	}
+}
+
+func TestParseGGUF_ExceedsMaxRecursionDepth(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "gguf-max-depth-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	var buf bytes.Buffer
+	_, _ = buf.Write([]byte("GGUF"))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(3))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+
+	// KV 1: deeply nested array (exceeding MaxRecursionDepth=4)
+	writeGGUFString(&buf, "nested.array")
+	// Depth 1
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeArray))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeArray))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+	// Depth 2
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeArray))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+	// Depth 3
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeArray))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+	// Depth 4
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeArray))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+	// Depth 5 (Exceeds MaxRecursionDepth)
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(TypeUInt32))
+	_ = binary.Write(&buf, binary.LittleEndian, uint64(1))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(42))
+
+	_, _ = tempFile.Write(buf.Bytes())
+	_ = tempFile.Close()
+
+	_, err = ParseGGUF(tempFile.Name())
+	if err == nil {
+		t.Fatalf("expected error when recursion depth exceeds MaxRecursionDepth, got nil")
+	}
+}
+
+func TestParseGGUF_CorruptedMagicOrVersion(t *testing.T) {
+	// Bad magic
+	tempFile, err := os.CreateTemp("", "gguf-bad-magic-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	_, _ = tempFile.Write([]byte("BADM\x03\x00\x00\x00"))
+	_ = tempFile.Close()
+
+	_, err = ParseGGUF(tempFile.Name())
+	if err == nil {
+		t.Fatalf("expected error for bad magic, got nil")
+	}
+
+	// Bad version
+	tempFile2, err := os.CreateTemp("", "gguf-bad-version-*.gguf")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile2.Name())
+	_, _ = tempFile2.Write([]byte("GGUF\x09\x00\x00\x00")) // Version 9 unsupported
+	_ = tempFile2.Close()
+
+	_, err = ParseGGUF(tempFile2.Name())
+	if err == nil {
+		t.Fatalf("expected error for unsupported version, got nil")
+	}
+}
+
