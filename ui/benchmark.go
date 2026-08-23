@@ -145,18 +145,21 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 	} else {
 		fastest, efficient := d.GetStats()
 		if fastest != nil {
-			fastestName := TruncateVisual(fastest.ModelName, 24, "...")
+			nameLen := max(14, (cardWidth-60)/2)
+			fastestName := TruncateVisual(fastest.ModelName, nameLen, "...")
 			fastestStr := fmt.Sprintf("Fastest Model: %s (%.2f t/s)", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(fastestName), fastest.TokensPerSec)
 			effStr := "N/A"
 			if efficient != nil {
 				ramGB := efficient.RAMUsageMB / 1024.0
-				effName := TruncateVisual(efficient.ModelName, 24, "...")
-				effStr = fmt.Sprintf("Most Efficient: %s (%.2f t/s per GB RAM)", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(effName), efficient.TokensPerSec/ramGB)
+				effName := TruncateVisual(efficient.ModelName, nameLen, "...")
+				effStr = fmt.Sprintf("Most Efficient: %s (%.2f t/s/GB)", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(effName), efficient.TokensPerSec/ramGB)
 			}
-			historySB.WriteString(fmt.Sprintf("%s  •  %s\n\n", fastestStr, effStr))
+			statsLine := fmt.Sprintf("%s  •  %s", fastestStr, effStr)
+			statsLine = TruncateVisual(statsLine, max(30, cardWidth-6), "...")
+			historySB.WriteString(statsLine + "\n\n")
 		}
 
-		historySB.WriteString(fmt.Sprintf("%-2s %-12s %-20s %-14s %-10s %-12s\n",
+		historySB.WriteString(fmt.Sprintf("%-2s %-12s %-24s %-14s %-10s %-12s\n",
 			"", "Date", "Model", "Speed", "Startup", "RAM/VRAM",
 		))
 		divWidth := cardWidth - 8
@@ -182,7 +185,7 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 		for i := startIdx; i >= 0 && count < maxVisible; i-- {
 			r := d.History[i]
 			dateStr := r.RunDate.Format("01-02 15:04")
-			modelName := TruncateVisual(r.ModelName, 18, "...")
+			modelName := TruncateVisual(r.ModelName, 22, "...")
 			memInfo := fmt.Sprintf("%.1fG/%.1fG", r.RAMUsageMB/1024.0, r.VRAMUsageMB/1024.0)
 
 			marker := "  "
@@ -192,7 +195,7 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 				rowStyle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 			}
 
-			line := fmt.Sprintf("%-2s %-12s %-20s %-14s %-10s %-12s",
+			line := fmt.Sprintf("%-2s %-12s %-24s %-14s %-10s %-12s",
 				marker,
 				dateStr,
 				modelName,
@@ -291,11 +294,19 @@ func (d *PerformanceDashboardModel) View(width int, height int) string {
 
 	hwContent := hwSB.String()
 
-	// Assemble SurfaceCards
+	// Assemble SurfaceCards with distributed height
+	cardHeight := 0
+	if height > 0 {
+		availHeight := height - 1 // Footer takes 1 line
+		if availHeight > 0 {
+			cardHeight = availHeight / 3
+		}
+	}
+
 	historyBadge := fmt.Sprintf("%d runs", len(d.History))
-	card1 := SurfaceCard("Benchmark Run History", historyContent, cardWidth, true, historyBadge)
-	card2 := SurfaceCard("Throughput & Latency (Tokens/sec)", chartContent, cardWidth, false, "TTFT + Decode")
-	card3 := SurfaceCard("Test Platform", hwContent, cardWidth, false, "Specs")
+	card1 := SurfaceCardWithHeight("Benchmark Run History", historyContent, cardWidth, cardHeight, true, historyBadge)
+	card2 := SurfaceCardWithHeight("Throughput & Latency (Tokens/sec)", chartContent, cardWidth, cardHeight, false, "TTFT + Decode")
+	card3 := SurfaceCardWithHeight("Test Platform", hwContent, cardWidth, cardHeight, false, "Specs")
 
 	helpFooter := fmt.Sprintf("  %s Back to Browser  %s Select Run  %s Run Benchmark",
 		StyleHelpKey.Render("[Esc]"),

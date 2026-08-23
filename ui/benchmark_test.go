@@ -1,10 +1,11 @@
-﻿package ui
+package ui
 
 import (
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/benchmark"
 	"github.com/BIJJUDAMA/runora/hardware"
 )
@@ -113,7 +114,12 @@ func TestBentoBenchmarkDashboardLayout(t *testing.T) {
 		t.Errorf("expected view to contain CPU model 'Ryzen 9 7950X', got:\n%s", view)
 	}
 
-	// 2. Strict Zero Emojis check across dashboard view
+	// 2. Verify full screen height distribution
+	if h := lipgloss.Height(view); h != 40 {
+		t.Errorf("expected view height 40, got %d", h)
+	}
+
+	// 3. Strict Zero Emojis check across dashboard view
 	for _, r := range view {
 		if isEmoji(r) {
 			t.Errorf("PerformanceDashboardModel.View contains emoji %q in output", string(r))
@@ -128,6 +134,9 @@ func TestBentoBenchmarkDashboardLayout(t *testing.T) {
 	}
 	if !strings.Contains(emptyView, "No benchmark records found") {
 		t.Errorf("empty dashboard missing 'No benchmark records found'")
+	}
+	if h := lipgloss.Height(emptyView); h != 40 {
+		t.Errorf("expected empty view height 40, got %d", h)
 	}
 	for _, r := range emptyView {
 		if isEmoji(r) {
