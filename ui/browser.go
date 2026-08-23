@@ -1675,174 +1675,6 @@ func (m *BrowserModel) adjustSelection() {
 	}
 }
 
-func (m *BrowserModel) rightPanelView(width int, height int) string {
-	if len(m.sidebarItems) == 0 || m.selected < 0 || m.selected >= len(m.sidebarItems) {
-		return "\n  No model selected."
-	}
-	item := m.sidebarItems[m.selected]
-
-	if item.Type != ItemModelEntry {
-		return "\n  No model selected."
-	}
-	selectedModel := m.models[item.ModelIdx]
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\n  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(selectedModel.Name)))
-	sb.WriteString(fmt.Sprintf("  %s\n\n", StyleHelp.Render(selectedModel.FilePath)))
-
-	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Architecture:", selectedModel.Architecture))
-	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Quantization:", selectedModel.Quantization))
-	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Context Length:", fmt.Sprintf("%d tokens", selectedModel.ContextLength)))
-	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Param Count:", formatParams(selectedModel.ParamCount)))
-	if selectedModel.ShardCount > 1 {
-		sb.WriteString(fmt.Sprintf("  %-16s %s (%d shards)\n", "File Size:", formatSize(selectedModel.FileSize), selectedModel.ShardCount))
-		sb.WriteString(fmt.Sprintf("  %-16s %d shards (multi-file GGUF)\n", "Shards:", selectedModel.ShardCount))
-	} else {
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "File Size:", formatSize(selectedModel.FileSize)))
-	}
-	sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Runtime:", selectedModel.Runtime))
-	sb.WriteString(fmt.Sprintf("  %-16s %s (Press [E] to cycle)\n\n", "Task Type:", selectedModel.Task))
-
-
-
-
-	// Memory Estimates
-	if m.hardwareSpecs != nil {
-		est := hardware.EstimateMemory(selectedModel, m.hardwareSpecs, 0)
-		var suitStr string
-		var suitabilityColor lipgloss.TerminalColor
-		switch est.Suitability {
-		case hardware.SuitabilityFitsVRAM:
-			suitStr = StyleBadgeFits.Render(" FITS VRAM ")
-			suitabilityColor = ColorSecondary
-		case hardware.SuitabilityPartialVRAM:
-			suitStr = StyleBadgePartial.Render(" PARTIAL VRAM ")
-			suitabilityColor = ColorGold
-		case hardware.SuitabilityFitsRAM:
-			suitStr = StyleBadgeFits.Render(" FITS RAM (CPU) ")
-			suitabilityColor = ColorSecondary
-		case hardware.SuitabilityExceeds:
-			suitStr = StyleBadgeExceeds.Render(" EXCEEDS RAM ")
-			suitabilityColor = ColorDanger
-		}
-
-		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("Memory Suitability:")))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Status:", suitStr))
-
-		// Visual progress bars
-		if m.hardwareSpecs.IsUnified {
-			var unifiedPct float64
-			if m.hardwareSpecs.GPU.VRAM > 0 {
-				unifiedPct = (float64(est.TotalMemory) / float64(m.hardwareSpecs.GPU.VRAM)) * 100
-			}
-			bar := RenderProgressBar(unifiedPct, 15, suitabilityColor)
-			sb.WriteString(fmt.Sprintf("  %-16s %s %.0f%% (%s / %s)\n", "Unified Memory:", bar, unifiedPct, formatSize(int64(est.TotalMemory)), formatSize(int64(m.hardwareSpecs.GPU.VRAM))))
-		} else {
-			if m.hardwareSpecs.GPU.VRAM > 0 {
-				vramUsage := (est.WeightSize * uint64(est.GPUOffloadPct) / 100)
-				if est.GPUOffloadPct > 0 {
-					vramUsage += est.KVCacheSize + est.Overhead
-				}
-				if vramUsage > m.hardwareSpecs.GPU.VRAM {
-					vramUsage = m.hardwareSpecs.GPU.VRAM
-				}
-				vramPct := (float64(vramUsage) / float64(m.hardwareSpecs.GPU.VRAM)) * 100
-				barColor := ColorSecondary
-				if vramPct > 90 {
-					barColor = ColorGold
-				}
-				if est.Suitability == hardware.SuitabilityExceeds {
-					barColor = ColorDanger
-				}
-				bar := RenderProgressBar(vramPct, 15, barColor)
-				sb.WriteString(fmt.Sprintf("  %-16s %s %.0f%% (%s / %s)\n", "GPU VRAM:", bar, vramPct, formatSize(int64(vramUsage)), formatSize(int64(m.hardwareSpecs.GPU.VRAM))))
-			} else {
-				sb.WriteString(fmt.Sprintf("  %-16s %s\n", "GPU VRAM:", lipgloss.NewStyle().Foreground(ColorMuted).Render("N/A (CPU Mode)")))
-			}
-
-			if m.hardwareSpecs.RAM.Total > 0 {
-				vramUsage := (est.WeightSize * uint64(est.GPUOffloadPct) / 100)
-				if est.GPUOffloadPct > 0 {
-					vramUsage += est.KVCacheSize + est.Overhead
-				}
-				var ramUsage uint64
-				if est.TotalMemory > vramUsage {
-					ramUsage = est.TotalMemory - vramUsage
-				}
-				ramPct := (float64(ramUsage) / float64(m.hardwareSpecs.RAM.Total)) * 100
-				barColor := ColorSecondary
-				if ramPct > 80 {
-					barColor = ColorGold
-				}
-				bar := RenderProgressBar(ramPct, 15, barColor)
-				sb.WriteString(fmt.Sprintf("  %-16s %s %.0f%% (%s / %s)\n", "System RAM:", bar, ramPct, formatSize(int64(ramUsage)), formatSize(int64(m.hardwareSpecs.RAM.Total))))
-			}
-		}
-
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "KV Cache:", formatSize(int64(est.KVCacheSize))))
-		if est.ActivationSize > 0 {
-			sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Activation:", formatSize(int64(est.ActivationSize))))
-		}
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Overhead:", formatSize(int64(est.Overhead))))
-		sb.WriteString(fmt.Sprintf("  %-16s %s (GPU offload: %d%%)\n", "Total Memory:", formatSize(int64(est.TotalMemory)), est.GPUOffloadPct))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Recommendation:", est.Reason))
-		if est.Suitability == hardware.SuitabilityExceeds {
-			sb.WriteString(fmt.Sprintf("                   %s %s\n",
-				lipgloss.NewStyle().Foreground(ColorGold).Bold(true).Render("Press [Enter]"),
-				lipgloss.NewStyle().Foreground(ColorMuted).Render("to choose a profile with a smaller context length."),
-			))
-		}
-		sb.WriteString("\n")
-	} else {
-		sb.WriteString("  Detecting hardware requirements...\n\n")
-	}
-
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Server Status:") + " ")
-	var statusText string
-	isRunning := m.isModelRunning(selectedModel.FilePath)
-
-	if isRunning {
-		port := 50505
-		for _, inst := range m.srvRunner.GetAllInstances() {
-			if inst.ModelPath == selectedModel.FilePath {
-				port = inst.Port
-				break
-			}
-		}
-		statusText = StyleBadgeRunning.Render(" RUNNING ") + lipgloss.NewStyle().Foreground(ColorSecondary).Render(fmt.Sprintf(" on http://127.0.0.1:%d", port))
-	} else if m.serverUIStatus == UIStatusStarting && m.runningModelPath == selectedModel.FilePath {
-		statusText = StyleBadgeStarting.Render(" STARTING ")
-	} else if m.serverUIStatus == UIStatusFailed && m.runningModelPath == selectedModel.FilePath {
-		statusText = StyleBadgeFailed.Render(" FAILED ")
-	} else {
-		statusText = StyleBadgeStopped.Render(" STOPPED ")
-	}
-	sb.WriteString(statusText + "\n")
-
-	if isRunning {
-		sb.WriteString("\n  Active model is currently serving requests.\n")
-	} else if m.serverUIStatus == UIStatusFailed && m.runningModelPath == selectedModel.FilePath && m.serverErr != nil {
-		sb.WriteString(fmt.Sprintf("\n  %s\n", StyleDanger.Render(fmt.Sprintf("Error: %v", m.serverErr))))
-	}
-	sb.WriteString("\n")
-
-	// System specifications
-	if m.hardwareSpecs != nil {
-		gpuInfo := fmt.Sprintf("%s (%s VRAM)", m.hardwareSpecs.GPU.Name, formatSize(int64(m.hardwareSpecs.GPU.VRAM)))
-		if m.hardwareSpecs.IsUnified {
-			gpuInfo = fmt.Sprintf("%s (%s Unified)", m.hardwareSpecs.GPU.Name, formatSize(int64(m.hardwareSpecs.GPU.VRAM)))
-		}
-		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("System Specifications:")))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "OS:", m.hardwareSpecs.OS))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "CPU Model:", m.hardwareSpecs.CPU.Model))
-		sb.WriteString(fmt.Sprintf("  %-16s %d threads\n", "CPU Threads:", m.hardwareSpecs.CPU.Threads))
-		sb.WriteString(fmt.Sprintf("  %-16s %s (%s available)\n", "RAM:", formatSize(int64(m.hardwareSpecs.RAM.Total)), formatSize(int64(m.hardwareSpecs.RAM.Available))))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "GPU:", gpuInfo))
-	}
-
-	return sb.String()
-}
-
 func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string {
 	if totalWidth < 60 {
 		totalWidth = 60
@@ -1851,7 +1683,10 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 	if leftWidth < 25 {
 		leftWidth = 25
 	}
-	rightWidth := totalWidth - leftWidth - 6
+	rightWidth := totalWidth - leftWidth - 4
+	if rightWidth < 30 {
+		rightWidth = 30
+	}
 
 	if panelHeight < 10 {
 		panelHeight = 10
@@ -1859,9 +1694,9 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 
 	var leftSb strings.Builder
 	if len(m.sidebarItems) == 0 {
-		leftSb.WriteString("\n  No models found.")
+		leftSb.WriteString("  No models found.")
 	} else {
-		maxVisible := panelHeight - 2
+		maxVisible := panelHeight - 3
 		if maxVisible < 1 {
 			maxVisible = 1
 		}
@@ -1876,7 +1711,6 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 			end = len(m.sidebarItems)
 		}
 
-		leftSb.WriteString("\n")
 		for idx := m.scrollOffset; idx < end; idx++ {
 			item := m.sidebarItems[idx]
 
@@ -1887,7 +1721,7 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 
 			if item.Type == ItemFolderHeader {
 				folderLabel := item.Label
-				selWidth := leftWidth - 2
+				selWidth := leftWidth - 4
 				if selWidth < 10 {
 					selWidth = 10
 				}
@@ -1956,7 +1790,7 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 				displayName = indent + rawName
 			}
 
-			selWidth := leftWidth - 2
+			selWidth := leftWidth - 4
 			if selWidth < 10 {
 				selWidth = 10
 			}
@@ -1974,34 +1808,181 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 		}
 	}
 
-	var leftTitle, rightTitle string
-	leftBorderColor := ColorBorder
-	rightBorderColor := ColorBorder
+	leftView := SurfaceCard("Models", leftSb.String(), leftWidth, !m.focusRight, fmt.Sprintf("%d models", len(m.models)))
 
-	if m.focusRight {
-		rightBorderColor = ColorPrimary
-		leftTitle = StyleTitle.Render("Models")
-		rightTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Details")
+	var rightView string
+	if len(m.sidebarItems) == 0 || m.selected < 0 || m.selected >= len(m.sidebarItems) || m.sidebarItems[m.selected].Type != ItemModelEntry {
+		rightView = SurfaceCard("Model Details", "  No model selected.", rightWidth, m.focusRight, "")
 	} else {
-		leftBorderColor = ColorPrimary
-		leftTitle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Padding(0, 1).Render("Models")
-		rightTitle = StyleTitle.Render("Details")
+		selectedModel := m.models[m.sidebarItems[m.selected].ModelIdx]
+		shardCount := selectedModel.ShardCount
+		if shardCount == 0 {
+			shardCount = 1
+		}
+
+		// 1. Model Overview Card
+		var overviewSb strings.Builder
+		overviewSb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(selectedModel.Name)))
+		overviewSb.WriteString(fmt.Sprintf("  %s\n\n", StyleHelp.Render(selectedModel.FilePath)))
+		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Architecture:", selectedModel.Architecture))
+		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Quantization:", selectedModel.Quantization))
+		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Runtime:", selectedModel.Runtime))
+		overviewSb.WriteString(fmt.Sprintf("  %-16s %s (Press [E] to cycle)\n", "Task Type:", selectedModel.Task))
+
+		var statusText string
+		isRunning := m.isModelRunning(selectedModel.FilePath)
+		if isRunning {
+			port := 50505
+			for _, inst := range m.srvRunner.GetAllInstances() {
+				if inst.ModelPath == selectedModel.FilePath {
+					port = inst.Port
+					break
+				}
+			}
+			statusText = StyleBadgeRunning.Render(" RUNNING ") + lipgloss.NewStyle().Foreground(ColorSecondary).Render(fmt.Sprintf(" on http://127.0.0.1:%d", port))
+		} else if m.serverUIStatus == UIStatusStarting && m.runningModelPath == selectedModel.FilePath {
+			statusText = StyleBadgeStarting.Render(" STARTING ")
+		} else if m.serverUIStatus == UIStatusFailed && m.runningModelPath == selectedModel.FilePath {
+			statusText = StyleBadgeFailed.Render(" FAILED ")
+		} else {
+			statusText = StyleBadgeStopped.Render(" STOPPED ")
+		}
+		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Server Status:", statusText))
+		if isRunning {
+			overviewSb.WriteString("  Active model is currently serving requests.\n")
+		} else if m.serverUIStatus == UIStatusFailed && m.runningModelPath == selectedModel.FilePath && m.serverErr != nil {
+			overviewSb.WriteString(fmt.Sprintf("  %s\n", StyleDanger.Render(fmt.Sprintf("Error: %v", m.serverErr))))
+		}
+
+		cardOverview := SurfaceCard("Model Details", overviewSb.String(), rightWidth, m.focusRight, selectedModel.Architecture)
+
+		// 2. Hardware Fit Card
+		var fitSb strings.Builder
+		suitabilityTier := "[Detecting...]"
+		if m.hardwareSpecs != nil {
+			est := hardware.EstimateMemory(selectedModel, m.hardwareSpecs, 0)
+			var suitStr string
+			var suitabilityColor lipgloss.TerminalColor
+			switch est.Suitability {
+			case hardware.SuitabilityFitsVRAM:
+				suitabilityTier = "[● Fits VRAM]"
+				suitStr = StyleBadgeFits.Render(" FITS VRAM ")
+				suitabilityColor = ColorSecondary
+			case hardware.SuitabilityPartialVRAM:
+				suitabilityTier = "[◑ Partial VRAM]"
+				suitStr = StyleBadgePartial.Render(" PARTIAL VRAM ")
+				suitabilityColor = ColorGold
+			case hardware.SuitabilityFitsRAM:
+				suitabilityTier = "[○ Fits RAM]"
+				suitStr = StyleBadgeFits.Render(" FITS RAM (CPU) ")
+				suitabilityColor = ColorSecondary
+			case hardware.SuitabilityExceeds:
+				suitabilityTier = "[✗ Exceeds RAM]"
+				suitStr = StyleBadgeExceeds.Render(" EXCEEDS RAM ")
+				suitabilityColor = ColorDanger
+			}
+
+			fitSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Suitability:", suitStr))
+
+			// Visual progress bars
+			if m.hardwareSpecs.IsUnified {
+				var unifiedPct float64
+				if m.hardwareSpecs.GPU.VRAM > 0 {
+					unifiedPct = (float64(est.TotalMemory) / float64(m.hardwareSpecs.GPU.VRAM)) * 100
+				}
+				bar := RenderProgressBar(unifiedPct, 15, suitabilityColor)
+				fitSb.WriteString(fmt.Sprintf("  %-16s %s %.0f%% (%s / %s)\n", "Unified Memory:", bar, unifiedPct, formatSize(int64(est.TotalMemory)), formatSize(int64(m.hardwareSpecs.GPU.VRAM))))
+			} else {
+				if m.hardwareSpecs.GPU.VRAM > 0 {
+					vramUsage := (est.WeightSize * uint64(est.GPUOffloadPct) / 100)
+					if est.GPUOffloadPct > 0 {
+						vramUsage += est.KVCacheSize + est.Overhead
+					}
+					if vramUsage > m.hardwareSpecs.GPU.VRAM {
+						vramUsage = m.hardwareSpecs.GPU.VRAM
+					}
+					vramPct := (float64(vramUsage) / float64(m.hardwareSpecs.GPU.VRAM)) * 100
+					barColor := ColorSecondary
+					if vramPct > 90 {
+						barColor = ColorGold
+					}
+					if est.Suitability == hardware.SuitabilityExceeds {
+						barColor = ColorDanger
+					}
+					bar := RenderProgressBar(vramPct, 15, barColor)
+					fitSb.WriteString(fmt.Sprintf("  %-16s %s %.0f%% (%s / %s)\n", "GPU VRAM:", bar, vramPct, formatSize(int64(vramUsage)), formatSize(int64(m.hardwareSpecs.GPU.VRAM))))
+				} else {
+					fitSb.WriteString(fmt.Sprintf("  %-16s %s\n", "GPU VRAM:", lipgloss.NewStyle().Foreground(ColorMuted).Render("N/A (CPU Mode)")))
+				}
+
+				if m.hardwareSpecs.RAM.Total > 0 {
+					vramUsage := (est.WeightSize * uint64(est.GPUOffloadPct) / 100)
+					if est.GPUOffloadPct > 0 {
+						vramUsage += est.KVCacheSize + est.Overhead
+					}
+					var ramUsage uint64
+					if est.TotalMemory > vramUsage {
+						ramUsage = est.TotalMemory - vramUsage
+					}
+					ramPct := (float64(ramUsage) / float64(m.hardwareSpecs.RAM.Total)) * 100
+					barColor := ColorSecondary
+					if ramPct > 80 {
+						barColor = ColorGold
+					}
+					bar := RenderProgressBar(ramPct, 15, barColor)
+					fitSb.WriteString(fmt.Sprintf("  %-16s %s %.0f%% (%s / %s)\n", "System RAM:", bar, ramPct, formatSize(int64(ramUsage)), formatSize(int64(m.hardwareSpecs.RAM.Total))))
+				}
+			}
+
+			fitSb.WriteString(fmt.Sprintf("  %-16s %s\n", "KV Cache:", formatSize(int64(est.KVCacheSize))))
+			if est.ActivationSize > 0 {
+				fitSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Activation:", formatSize(int64(est.ActivationSize))))
+			}
+			fitSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Overhead:", formatSize(int64(est.Overhead))))
+			fitSb.WriteString(fmt.Sprintf("  %-16s %s (GPU offload: %d%%)\n", "Total Memory:", formatSize(int64(est.TotalMemory)), est.GPUOffloadPct))
+			fitSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Recommendation:", est.Reason))
+			if est.Suitability == hardware.SuitabilityExceeds {
+				fitSb.WriteString(fmt.Sprintf("                   %s %s\n",
+					lipgloss.NewStyle().Foreground(ColorGold).Bold(true).Render("Press [Enter]"),
+					lipgloss.NewStyle().Foreground(ColorMuted).Render("to choose a profile with a smaller context length."),
+				))
+			}
+		} else {
+			fitSb.WriteString("  Detecting hardware requirements...\n")
+		}
+
+		cardFit := SurfaceCard("Hardware Fit", fitSb.String(), rightWidth, false, suitabilityTier)
+
+		// 3. Parameters & Shards Card
+		var paramSb strings.Builder
+		paramSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Param Count:", formatParams(selectedModel.ParamCount)))
+		paramSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Context Length:", fmt.Sprintf("%d tokens", selectedModel.ContextLength)))
+		paramSb.WriteString(fmt.Sprintf("  %-16s %s\n", "File Size:", formatSize(selectedModel.FileSize)))
+		if shardCount > 1 {
+			paramSb.WriteString(fmt.Sprintf("  %-16s %d shards (multi-file GGUF)\n", "Shards:", shardCount))
+			if len(selectedModel.ShardFiles) > 0 {
+				for i, sf := range selectedModel.ShardFiles {
+					if i >= 3 {
+						paramSb.WriteString(fmt.Sprintf("                   ... +%d more shards\n", len(selectedModel.ShardFiles)-3))
+						break
+					}
+					paramSb.WriteString(fmt.Sprintf("                   - %s\n", filepath.Base(sf)))
+				}
+			}
+		} else {
+			paramSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Shards:", "Single file (1 shard)"))
+		}
+		if selectedModel.Layers > 0 {
+			paramSb.WriteString(fmt.Sprintf("  %-16s %d layers\n", "Layers:", selectedModel.Layers))
+		}
+		if selectedModel.Heads > 0 {
+			paramSb.WriteString(fmt.Sprintf("  %-16s %d (KV: %d)\n", "Attention Heads:", selectedModel.Heads, selectedModel.HeadsKV))
+		}
+
+		cardParams := SurfaceCard("Parameters & Shards", paramSb.String(), rightWidth, false, fmt.Sprintf("%d shards", shardCount))
+
+		rightView = lipgloss.JoinVertical(lipgloss.Left, cardOverview, cardFit, cardParams)
 	}
-
-	leftPanelContent := fmt.Sprintf("%s\n%s", leftTitle, leftSb.String())
-
-	leftView := StyleLeftPanel.Copy().
-		BorderForeground(leftBorderColor).
-		Width(leftWidth).
-		Height(panelHeight).
-		Render(leftPanelContent)
-
-	rightPanelContent := fmt.Sprintf("%s\n%s", rightTitle, m.rightPanelView(rightWidth, panelHeight))
-	rightView := StyleRightPanel.Copy().
-		BorderForeground(rightBorderColor).
-		Width(rightWidth).
-		Height(panelHeight).
-		Render(rightPanelContent)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftView, rightView)
 }

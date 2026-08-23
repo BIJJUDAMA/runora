@@ -875,9 +875,8 @@ func TestBrowserDownloaderClearQueue(t *testing.T) {
 		t.Errorf("expected remaining task to be t2")
 	}
 
-	// 2. Add t1 back (as completed) and test clearing all finished tasks with 'x'
-	t1 = bm.downloadQueue.AddTask("org/repo1", "m1.gguf", 100, "http://example.com/m1.gguf")
-	t1.Status = model.StatusCompleted
+	// 2. Add t1 back (as completed/failed) and test clearing all finished tasks with 'x'
+	_ = bm.downloadQueue.AddFailedTask("org/repo1", "m1.gguf", fmt.Errorf("failed"))
 
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	bm = m.(*BrowserModel)
