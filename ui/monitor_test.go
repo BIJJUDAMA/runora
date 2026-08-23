@@ -347,9 +347,17 @@ func TestBentoMultiInstanceMonitorLayout(t *testing.T) {
 		}
 	}
 
+	if lines := len(strings.Split(view, "\n")); lines != 30 {
+		t.Errorf("expected view height to match full screen height 30, got %d", lines)
+	}
+
 	// 2. Test switching selection to instance 2 (down / 'j')
 	_ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	view2 := model.View(100, 30)
+
+	if lines := len(strings.Split(view2, "\n")); lines != 30 {
+		t.Errorf("expected view2 height to match full screen height 30, got %d", lines)
+	}
 
 	if !strings.Contains(view2, "Port 8081") {
 		t.Errorf("expected view2 to highlight Port 8081, got:\n%s", view2)
@@ -378,6 +386,10 @@ func TestBentoMultiInstanceMonitorLayout(t *testing.T) {
 	emptyModel := NewMonitorModel(emptyRuntime)
 	emptyModel.Refresh()
 	viewEmpty := emptyModel.View(100, 30)
+
+	if lines := len(strings.Split(viewEmpty, "\n")); lines != 30 {
+		t.Errorf("expected viewEmpty height to match full screen height 30, got %d", lines)
+	}
 
 	if !strings.Contains(viewEmpty, "Active Server Instances") {
 		t.Errorf("expected empty view to contain 'Active Server Instances' card, got:\n%s", viewEmpty)

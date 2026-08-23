@@ -295,6 +295,15 @@ func (m *MonitorModel) View(width int, height int) string {
 		endHex = "#04B575"
 	}
 
+	// Calculate height distribution among cards
+	var hSummary, hInstance, hContext, hControl int
+	if height >= 16 {
+		hSummary = (height * 7) / 30
+		hInstance = (height * 9) / 30
+		hContext = (height * 8) / 30
+		hControl = height - hSummary - hInstance - hContext
+	}
+
 	// 1. Top Summary Bento Card
 	var summaryContent string
 	var summaryBadge string
@@ -345,18 +354,24 @@ func (m *MonitorModel) View(width int, height int) string {
 		summaryContent = strings.TrimRight(sumSb.String(), "\n")
 	}
 
-	summaryCard := SurfaceCard("Active Server Instances", summaryContent, cardWidth, false, summaryBadge)
-
 	// If no instances running, render Top Summary Card + Control Actions Card
 	if len(m.instances) == 0 {
+		var hEmptySum, hEmptyCtrl int
+		if height >= 8 {
+			hEmptySum = height / 2
+			hEmptyCtrl = height - hEmptySum
+		}
+		summaryCard := SurfaceCardWithHeight("Active Server Instances", summaryContent, cardWidth, hEmptySum, false, summaryBadge)
 		controlShortcuts := fmt.Sprintf("  %s Back to Browser  %s Models  %s Launch",
 			StyleHelpKey.Render("[Esc]"),
 			StyleHelpKey.Render("[1]"),
 			StyleHelpKey.Render("[2]"),
 		)
-		controlCard := SurfaceCard("Control Actions", controlShortcuts, cardWidth, false, "")
+		controlCard := SurfaceCardWithHeight("Control Actions", controlShortcuts, cardWidth, hEmptyCtrl, false, "")
 		return summaryCard + "\n" + controlCard
 	}
+
+	summaryCard := SurfaceCardWithHeight("Active Server Instances", summaryContent, cardWidth, hSummary, false, summaryBadge)
 
 	// Active selected instance resolution
 	selectedIdx := m.selected
@@ -389,21 +404,46 @@ func (m *MonitorModel) View(width int, height int) string {
 
 	// 2. Live Instance List / Selected Instance Bento Card
 	var instSb strings.Builder
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Model Name:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelBaseTrunc)))
-	instSb.WriteString(fmt.Sprintf("  %-20s %d\n", "Server Port:", selectedInst.Port))
-	instSb.WriteString(fmt.Sprintf("  %-20s %d\n", "Process PID:", selectedInst.PID))
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Host / Endpoint:", fmt.Sprintf("http://127.0.0.1:%d", selectedInst.Port)))
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Uptime:", uptimeStr))
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Generation Speed:", speedStr))
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "HTTP Status:", lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("HTTP 200 OK (Serving)")))
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Active Memory (RSS):", memStr))
-	instSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Requests Handled:", reqStr))
-	if selectedInst.LogFile != "" {
-		instSb.WriteString(fmt.Sprintf("  %-20s %s", "Log File Path:", TruncateVisual(selectedInst.LogFile, max(30, innerWidth-25), "...")))
+	if innerWidth >= 70 {
+		colW := innerWidth / 2
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Model Name:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelBaseTrunc)))
+
+		row2L := fmt.Sprintf("  %-18s %d", "Server Port:", selectedInst.Port)
+		row2R := fmt.Sprintf("%-18s %d", "Process PID:", selectedInst.PID)
+		instSb.WriteString(fmt.Sprintf("%-*s %s\n", colW, row2L, row2R))
+
+		row3L := fmt.Sprintf("  %-18s %s", "Host / Endpoint:", fmt.Sprintf("http://127.0.0.1:%d", selectedInst.Port))
+		row3R := fmt.Sprintf("%-18s %s", "Uptime:", uptimeStr)
+		instSb.WriteString(fmt.Sprintf("%-*s %s\n", colW, row3L, row3R))
+
+		row4L := fmt.Sprintf("  %-18s %s", "Generation Speed:", speedStr)
+		row4R := fmt.Sprintf("%-18s %s", "Active Memory (RSS):", memStr)
+		instSb.WriteString(fmt.Sprintf("%-*s %s\n", colW, row4L, row4R))
+
+		row5L := fmt.Sprintf("  %-18s %s", "HTTP Status:", lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("HTTP 200 OK (Serving)"))
+		row5R := fmt.Sprintf("%-18s %s", "Requests Handled:", reqStr)
+		instSb.WriteString(fmt.Sprintf("%-*s %s", colW, row5L, row5R))
+
+		if selectedInst.LogFile != "" {
+			instSb.WriteString(fmt.Sprintf("\n  %-18s %s", "Log File Path:", TruncateVisual(selectedInst.LogFile, max(30, innerWidth-22), "...")))
+		}
+	} else {
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Model Name:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelBaseTrunc)))
+		instSb.WriteString(fmt.Sprintf("  %-18s %d\n", "Server Port:", selectedInst.Port))
+		instSb.WriteString(fmt.Sprintf("  %-18s %d\n", "Process PID:", selectedInst.PID))
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Host / Endpoint:", fmt.Sprintf("http://127.0.0.1:%d", selectedInst.Port)))
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Uptime:", uptimeStr))
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Generation Speed:", speedStr))
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "HTTP Status:", lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("HTTP 200 OK (Serving)")))
+		instSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Active Memory (RSS):", memStr))
+		instSb.WriteString(fmt.Sprintf("  %-18s %s", "Requests Handled:", reqStr))
+		if selectedInst.LogFile != "" {
+			instSb.WriteString(fmt.Sprintf("\n  %-18s %s", "Log File Path:", TruncateVisual(selectedInst.LogFile, max(30, innerWidth-22), "...")))
+		}
 	}
 
 	instanceBadge := fmt.Sprintf("Port %d [Active]", selectedInst.Port)
-	instanceCard := SurfaceCard("Live Instance Details", instSb.String(), cardWidth, true, instanceBadge)
+	instanceCard := SurfaceCardWithHeight("Live Instance Details", instSb.String(), cardWidth, hInstance, true, instanceBadge)
 
 	// 3. Live Context Slot Utilization Bento Card
 	gaugeWidth := 20
@@ -422,20 +462,29 @@ func (m *MonitorModel) View(width int, height int) string {
 		contextGaugeStr = fmt.Sprintf("[%s] %.0f%% (%d / %d tokens)", bar, slotPct, slotMetrics.TotalNPast, slotMetrics.TotalNCtx)
 		contextBadge = fmt.Sprintf("%.0f%% Used", slotPct)
 
-		slotSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Context Window:", contextGaugeStr))
-		slotSb.WriteString(fmt.Sprintf("  %-20s %d / %d slots active\n", "Slot Allocations:", slotMetrics.ActiveSlots, slotMetrics.TotalSlots))
-		slotSb.WriteString(fmt.Sprintf("  %-20s %d tokens\n", "Processed (n_past):", slotMetrics.TotalNPast))
-		slotSb.WriteString(fmt.Sprintf("  %-20s %d tokens", "Capacity (n_ctx):", slotMetrics.TotalNCtx))
+		if innerWidth >= 70 {
+			colW := innerWidth / 2
+			slotSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Context Window:", contextGaugeStr))
+			row2L := fmt.Sprintf("  %-18s %d / %d slots active", "Slot Allocations:", slotMetrics.ActiveSlots, slotMetrics.TotalSlots)
+			row2R := fmt.Sprintf("%-18s %d tokens", "Processed (n_past):", slotMetrics.TotalNPast)
+			slotSb.WriteString(fmt.Sprintf("%-*s %s\n", colW, row2L, row2R))
+			slotSb.WriteString(fmt.Sprintf("  %-18s %d tokens", "Capacity (n_ctx):", slotMetrics.TotalNCtx))
+		} else {
+			slotSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Context Window:", contextGaugeStr))
+			slotSb.WriteString(fmt.Sprintf("  %-18s %d / %d slots active\n", "Slot Allocations:", slotMetrics.ActiveSlots, slotMetrics.TotalSlots))
+			slotSb.WriteString(fmt.Sprintf("  %-18s %d tokens\n", "Processed (n_past):", slotMetrics.TotalNPast))
+			slotSb.WriteString(fmt.Sprintf("  %-18s %d tokens", "Capacity (n_ctx):", slotMetrics.TotalNCtx))
+		}
 	} else {
 		bar := RenderGradientBar(0, gaugeWidth, startHex, endHex)
 		contextGaugeStr = fmt.Sprintf("[%s] 0%% (Idle / No slot data)", bar)
 		contextBadge = "Idle"
 
-		slotSb.WriteString(fmt.Sprintf("  %-20s %s\n", "Context Window:", contextGaugeStr))
-		slotSb.WriteString(fmt.Sprintf("  %-20s %s", "Status:", "Waiting for active inference requests / metrics query..."))
+		slotSb.WriteString(fmt.Sprintf("  %-18s %s\n", "Context Window:", contextGaugeStr))
+		slotSb.WriteString(fmt.Sprintf("  %-18s %s", "Status:", "Waiting for active inference requests / metrics query..."))
 	}
 
-	contextCard := SurfaceCard("Live Context Slot Utilization", slotSb.String(), cardWidth, false, contextBadge)
+	contextCard := SurfaceCardWithHeight("Live Context Slot Utilization", slotSb.String(), cardWidth, hContext, false, contextBadge)
 
 	// 4. Control Actions Card
 	helpShortcuts := fmt.Sprintf("  %s Restart  %s Stop  %s Stop All  %s Stream Logs  %s Back",
@@ -449,7 +498,7 @@ func (m *MonitorModel) View(width int, height int) string {
 		StyleHelpKey.Render("[Up/Down/j/k]"),
 		StyleHelpKey.Render("[Tick]"),
 	)
-	controlCard := SurfaceCard("Control Actions", helpShortcuts+"\n"+navShortcuts, cardWidth, false, "")
+	controlCard := SurfaceCardWithHeight("Control Actions", helpShortcuts+"\n"+navShortcuts, cardWidth, hControl, false, "")
 
 	return summaryCard + "\n" + instanceCard + "\n" + contextCard + "\n" + controlCard
 }
