@@ -19,21 +19,23 @@ const (
 )
 
 type GGUFMetadata struct {
-	ID            string
-	Name          string
-	Architecture  string
-	ContextLength uint32
-	Quantization  string
-	ParamCount    uint64
-	FileSize      int64
-	FilePath      string
-	Layers        uint32
-	Heads         uint32
-	HeadsKV       uint32
-	EmbeddingLen  uint32
-	HeadDim       uint32
-	Runtime       string
-	Task          string
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Architecture  string   `json:"architecture"`
+	ContextLength uint32   `json:"context_length"`
+	Quantization  string   `json:"quantization"`
+	ParamCount    uint64   `json:"param_count"`
+	FileSize      int64    `json:"file_size"`
+	FilePath      string   `json:"file_path"`
+	Layers        uint32   `json:"layers"`
+	Heads         uint32   `json:"heads"`
+	HeadsKV       uint32   `json:"heads_kv"`
+	EmbeddingLen  uint32   `json:"embedding_len"`
+	HeadDim       uint32   `json:"head_dim"`
+	Runtime       string   `json:"runtime"`
+	Task          string   `json:"task"`
+	ShardCount    int      `json:"shard_count,omitempty"`
+	ShardFiles    []string `json:"shard_files,omitempty"`
 }
 
 // ValueType is the GGUF metadata value type enum

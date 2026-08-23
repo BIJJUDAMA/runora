@@ -193,3 +193,104 @@ func TestDiscoverModelsCache(t *testing.T) {
 		t.Errorf("expected cache miss to fail parsing and return 0 models, got %d", len(models3))
 	}
 }
+
+func TestDiscoverMultiFileGGUFShards(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama-models-shards-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	shard1 := filepath.Join(tempDir, "qwen-72b-00001-of-00003.gguf")
+	shard2 := filepath.Join(tempDir, "qwen-72b-00002-of-00003.gguf")
+	shard3 := filepath.Join(tempDir, "qwen-72b-00003-of-00003.gguf")
+	single := filepath.Join(tempDir, "single-model.gguf")
+
+	// Shard 1 has GGUF metadata
+	if err := createMockGGUFAt(shard1, "Qwen 72B", "qwen2", 32768); err != nil {
+		t.Fatalf("failed to create shard 1: %v", err)
+	}
+	// Shards 2 and 3 have dummy bytes
+	_ = os.WriteFile(shard2, bytes.Repeat([]byte("B"), 200), 0644)
+	_ = os.WriteFile(shard3, bytes.Repeat([]byte("C"), 300), 0644)
+
+	// Single model
+	if err := createMockGGUFAt(single, "Single Model", "llama", 4096); err != nil {
+		t.Fatalf("failed to create single model: %v", err)
+	}
+
+	shard1Info, _ := os.Stat(shard1)
+	expectedTotalSize := shard1Info.Size() + 200 + 300
+
+	models, err := DiscoverModels(tempDir)
+	if err != nil {
+		t.Fatalf("DiscoverModels failed: %v", err)
+	}
+
+	if len(models) != 2 {
+		t.Fatalf("expected 2 logical models, got %d", len(models))
+	}
+
+	var shardedModel *GGUFMetadata
+	var singleModel *GGUFMetadata
+	for _, m := range models {
+		if m.ShardCount > 1 {
+			shardedModel = m
+		} else {
+			singleModel = m
+		}
+	}
+
+	if shardedModel == nil {
+		t.Fatalf("expected sharded model to be discovered")
+	}
+	if shardedModel.ShardCount != 3 {
+		t.Errorf("expected ShardCount 3, got %d", shardedModel.ShardCount)
+	}
+	if len(shardedModel.ShardFiles) != 3 {
+		t.Errorf("expected 3 ShardFiles, got %d", len(shardedModel.ShardFiles))
+	}
+	if shardedModel.FileSize != expectedTotalSize {
+		t.Errorf("expected aggregate FileSize %d, got %d", expectedTotalSize, shardedModel.FileSize)
+	}
+	if shardedModel.FilePath != shard1 {
+		t.Errorf("expected FilePath to point to primary shard %s, got %s", shard1, shardedModel.FilePath)
+	}
+
+	if singleModel == nil {
+		t.Fatalf("expected single model to be discovered")
+	}
+	if singleModel.ShardCount != 1 {
+		t.Errorf("expected single model ShardCount 1, got %d", singleModel.ShardCount)
+	}
+}
+
+func TestDiscoverMultiDirectory(t *testing.T) {
+	tempDir1, err := os.MkdirTemp("", "llama-models-dir1")
+	if err != nil {
+		t.Fatalf("failed to create temp dir 1: %v", err)
+	}
+	defer os.RemoveAll(tempDir1)
+
+	tempDir2, err := os.MkdirTemp("", "llama-models-dir2")
+	if err != nil {
+		t.Fatalf("failed to create temp dir 2: %v", err)
+	}
+	defer os.RemoveAll(tempDir2)
+
+	m1 := filepath.Join(tempDir1, "model1.gguf")
+	m2 := filepath.Join(tempDir2, "model2.gguf")
+
+	_ = createMockGGUFAt(m1, "Model 1", "llama", 2048)
+	_ = createMockGGUFAt(m2, "Model 2", "qwen2", 4096)
+
+	models, err := DiscoverModels(tempDir1, tempDir2)
+	if err != nil {
+		t.Fatalf("DiscoverModels with multiple directories failed: %v", err)
+	}
+
+	if len(models) != 2 {
+		t.Errorf("expected 2 discovered models from 2 directories, got %d", len(models))
+	}
+}
+
