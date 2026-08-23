@@ -77,8 +77,9 @@ func DetectHardware() (*HardwareSpecs, error) {
 		IsUnified: false, // Unified memory is macOS Apple Silicon specific
 	}
 
-	// 1. CPU Detection
+	// 1. CPU Detection (threads & physical cores)
 	specs.CPU.Threads = runtime.NumCPU()
+	specs.CPU.PhysicalCores = getWindowsCPUPhysicalCores()
 	specs.CPU.Model = getWindowsCPUModel()
 
 	// 2. RAM Detection
@@ -92,16 +93,68 @@ func DetectHardware() (*HardwareSpecs, error) {
 		specs.RAM.Available = 4 * 1024 * 1024 * 1024
 	}
 
-	// 3. GPU & VRAM Detection (Direct DXGI native syscalls <3ms, 64-bit VRAM)
-	gpuName, gpuVRAM, gpuType := getWindowsGPU()
-	specs.GPU.Name = gpuName
-	specs.GPU.VRAM = gpuVRAM
-	specs.GPU.Type = gpuType
-	if gpuType == "CUDA" {
-		specs.GPU.CudaVersion = detectCudaVersion()
+	// 3. Multi-GPU & VRAM Detection (Direct DXGI native syscalls <3ms, 64-bit VRAM)
+	gpus := getWindowsGPUs()
+	specs.GPUs = gpus
+	if len(gpus) > 0 {
+		specs.GPU = gpus[0]
+	} else {
+		specs.GPU = GPUSpecs{
+			Name: "Integrated Graphics / CPU",
+			VRAM: 0,
+			Type: "CPU",
+		}
+		specs.GPUs = []GPUSpecs{specs.GPU}
 	}
 
 	return specs, nil
+}
+
+func getWindowsCPUPhysicalCores() int {
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	getLogicalProcessorInformationEx := kernel32.NewProc("GetLogicalProcessorInformationEx")
+	if err := getLogicalProcessorInformationEx.Find(); err == nil {
+		var bufLen uint32
+		// RelationProcessorCore = 0
+		r1, _, _ := getLogicalProcessorInformationEx.Call(
+			uintptr(0), // RelationProcessorCore
+			uintptr(0),
+			uintptr(unsafe.Pointer(&bufLen)),
+		)
+		if r1 == 0 && bufLen > 0 {
+			buf := make([]byte, bufLen)
+			r2, _, _ := getLogicalProcessorInformationEx.Call(
+				uintptr(0),
+				uintptr(unsafe.Pointer(&buf[0])),
+				uintptr(unsafe.Pointer(&bufLen)),
+			)
+			if r2 != 0 {
+				count := 0
+				offset := uint32(0)
+				for offset+8 <= bufLen {
+					relationship := *(*uint32)(unsafe.Pointer(&buf[offset]))
+					size := *(*uint32)(unsafe.Pointer(&buf[offset+4]))
+					if size == 0 {
+						break
+					}
+					if relationship == 0 { // RelationProcessorCore
+						count++
+					}
+					offset += size
+				}
+				if count > 0 {
+					return count
+				}
+			}
+		}
+	}
+
+	// Fallback: threads / 2 if hyperthreaded, else threads
+	threads := runtime.NumCPU()
+	if threads > 1 {
+		return threads / 2
+	}
+	return 1
 }
 
 func getWindowsCPUModel() string {
@@ -133,10 +186,10 @@ func getWindowsRAM() (uint64, uint64, error) {
 	return memStatus.ullTotalPhys, memStatus.ullAvailPhys, nil
 }
 
-func getWindowsGPU() (string, uint64, string) {
+func getWindowsGPUs() []GPUSpecs {
 	// Primary: Native DXGI COM direct syscalls (<3ms, 64-bit VRAM without PowerShell/WMI overflow)
-	if name, vram, gpuType, err := getWindowsGPUviaDXGI(); err == nil && name != "" {
-		return name, vram, gpuType
+	if gpus, err := getWindowsGPUsViaDXGI(); err == nil && len(gpus) > 0 {
+		return gpus
 	}
 
 	// Fallback: Fast nvidia-smi check if DXGI fails
@@ -151,26 +204,57 @@ func getWindowsGPU() (string, uint64, string) {
 	cmd.Stdout = &out
 	if err := cmd.Run(); err == nil {
 		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		var gpus []GPUSpecs
+		cudaVer := detectCudaVersion()
 		for _, line := range lines {
 			parts := strings.Split(strings.TrimSpace(line), ",")
 			if len(parts) >= 2 {
 				name := strings.TrimSpace(parts[0])
 				var vramMb uint64
 				if _, err := fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &vramMb); err == nil && vramMb > 0 {
-					return name, vramMb * 1024 * 1024, "CUDA"
+					gpus = append(gpus, GPUSpecs{
+						Name:        name,
+						VRAM:        vramMb * 1024 * 1024,
+						Type:        "CUDA",
+						CudaVersion: cudaVer,
+					})
 				}
 			}
 		}
+		if len(gpus) > 0 {
+			return gpus
+		}
 	}
 
+	return []GPUSpecs{{
+		Name: "Integrated Graphics / CPU",
+		VRAM: 0,
+		Type: "CPU",
+	}}
+}
+
+func getWindowsGPU() (string, uint64, string) {
+	gpus := getWindowsGPUs()
+	if len(gpus) > 0 {
+		return gpus[0].Name, gpus[0].VRAM, gpus[0].Type
+	}
 	return "Integrated Graphics / CPU", 0, "CPU"
 }
 
+
 func getWindowsGPUviaDXGI() (string, uint64, string, error) {
+	gpus, err := getWindowsGPUsViaDXGI()
+	if err != nil || len(gpus) == 0 {
+		return "", 0, "", err
+	}
+	return gpus[0].Name, gpus[0].VRAM, gpus[0].Type, nil
+}
+
+func getWindowsGPUsViaDXGI() ([]GPUSpecs, error) {
 	dxgiDLL := windows.NewLazySystemDLL("dxgi.dll")
 	createDXGIFactory1 := dxgiDLL.NewProc("CreateDXGIFactory1")
 	if err := createDXGIFactory1.Find(); err != nil {
-		return "", 0, "", err
+		return nil, err
 	}
 
 	var factory uintptr
@@ -198,7 +282,7 @@ func getWindowsGPUviaDXGI() (string, uint64, string, error) {
 	}
 
 	if hr != 0 || factory == 0 {
-		return "", 0, "", fmt.Errorf("failed to create DXGI factory (hr=0x%x)", hr)
+		return nil, fmt.Errorf("failed to create DXGI factory (hr=0x%x)", hr)
 	}
 
 	factoryVtbl := *(*[32]uintptr)(unsafe.Pointer(*(*uintptr)(unsafe.Pointer(factory))))
@@ -207,10 +291,9 @@ func getWindowsGPUviaDXGI() (string, uint64, string, error) {
 
 	defer syscall.SyscallN(releaseFactory, factory)
 
-	var bestName string
-	var bestVRAM uint64
-	var bestType string
-	var foundHardware bool
+	var hardwareGPUs []GPUSpecs
+	var softwareGPUs []GPUSpecs
+	cudaVer := ""
 
 	for i := uint32(0); ; i++ {
 		var adapter uintptr
@@ -253,25 +336,63 @@ func getWindowsGPUviaDXGI() (string, uint64, string, error) {
 			}
 		}
 
-		if !isSoftware {
-			if !foundHardware || vram > bestVRAM {
-				foundHardware = true
-				bestName = name
-				bestVRAM = vram
-				bestType = gpuType
+		spec := GPUSpecs{
+			Name: name,
+			VRAM: vram,
+			Type: gpuType,
+		}
+
+		if gpuType == "CUDA" {
+			if cudaVer == "" {
+				cudaVer = detectCudaVersion()
 			}
-		} else if !foundHardware && bestName == "" {
-			bestName = name
-			bestVRAM = vram
-			bestType = gpuType
+			spec.CudaVersion = cudaVer
+		}
+
+		if !isSoftware {
+			hardwareGPUs = append(hardwareGPUs, spec)
+		} else {
+			softwareGPUs = append(softwareGPUs, spec)
 		}
 	}
 
-	if bestName != "" {
-		return bestName, bestVRAM, bestType, nil
+	var results []GPUSpecs
+	if len(hardwareGPUs) > 0 {
+		// Sort so best GPU comes first
+		sortGPUs(hardwareGPUs)
+		results = hardwareGPUs
+	} else if len(softwareGPUs) > 0 {
+		results = softwareGPUs
 	}
-	return "", 0, "", fmt.Errorf("no DXGI adapters found")
+
+	if len(results) > 0 {
+		return results, nil
+	}
+	return nil, fmt.Errorf("no DXGI adapters found")
 }
+
+func sortGPUs(gpus []GPUSpecs) {
+	for i := 0; i < len(gpus); i++ {
+		for j := i + 1; j < len(gpus); j++ {
+			scoreI := gpuScore(gpus[i])
+			scoreJ := gpuScore(gpus[j])
+			if scoreJ > scoreI {
+				gpus[i], gpus[j] = gpus[j], gpus[i]
+			}
+		}
+	}
+}
+
+func gpuScore(g GPUSpecs) uint64 {
+	score := g.VRAM
+	if g.Type == "CUDA" {
+		score += 100 * 1024 * 1024 * 1024 // prioritize CUDA
+	} else if g.Type == "ROCm" {
+		score += 50 * 1024 * 1024 * 1024
+	}
+	return score
+}
+
 
 func detectCudaVersion() string {
 	// 1. Env variable check (e.g. C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4)
