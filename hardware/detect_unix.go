@@ -29,7 +29,7 @@ func DetectHardware() (*HardwareSpecs, error) {
 	specs.RAM.Available = availRAM
 
 	// 3. GPU Detection
-	gpuName, gpuVRAM, gpuType := getUnixGPU()
+	gpuName, gpuVRAM, gpuType := getUnixGPU(totalRAM)
 	specs.GPU.Name = gpuName
 	specs.GPU.VRAM = gpuVRAM
 	specs.GPU.Type = gpuType
@@ -115,25 +115,35 @@ func getUnixRAM() (uint64, uint64) {
 	return total, avail
 }
 
-func getUnixGPU() (string, uint64, string) {
+func getUnixGPU(totalRAM uint64) (string, uint64, string) {
 	// Try running nvidia-smi
 	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err == nil {
-		parts := strings.Split(strings.TrimSpace(out.String()), ",")
-		if len(parts) >= 2 {
-			name := strings.TrimSpace(parts[0])
-			vramMb, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
-			if err == nil {
-				return name, vramMb * 1024 * 1024, "CUDA"
+		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		for _, line := range lines {
+			parts := strings.Split(strings.TrimSpace(line), ",")
+			if len(parts) >= 2 {
+				name := strings.TrimSpace(parts[0])
+				vramMb, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+				if err == nil && vramMb > 0 {
+					return name, vramMb * 1024 * 1024, "CUDA"
+				}
 			}
 		}
 	}
 
 	if runtime.GOOS == "darwin" {
 		if runtime.GOARCH == "arm64" {
-			return "Apple Silicon GPU", 0, "Metal"
+			if totalRAM == 0 {
+				totalRAM, _ = getUnixRAM()
+			}
+			vram := AppleSiliconMetalVRAM(totalRAM)
+			if vram == 0 {
+				vram = uint64(float64(8*1024*1024*1024) * 0.67)
+			}
+			return "Apple Silicon GPU", vram, "Metal"
 		}
 	}
 
