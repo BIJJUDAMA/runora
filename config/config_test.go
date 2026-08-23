@@ -294,3 +294,40 @@ func TestCorruptedConfigRecovery(t *testing.T) {
 		t.Errorf("new config.json should be valid JSON: %v", err)
 	}
 }
+
+func TestModelDirectories(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "runora-dirs-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cfg := defaultConfig(tempDir)
+	cfg.Paths.Models = filepath.Join(tempDir, "models")
+	secDir1 := filepath.Join(tempDir, "secondary1")
+	secDir2 := filepath.Join(tempDir, "secondary2")
+	cfg.Paths.ModelDirectories = []string{secDir1, secDir2, filepath.Join(tempDir, "models")} // duplicate primary included
+
+	allDirs := cfg.Paths.AllModelDirectories()
+	if len(allDirs) != 3 {
+		t.Fatalf("expected 3 deduplicated model directories, got %d: %v", len(allDirs), allDirs)
+	}
+
+	if allDirs[0] != filepath.Join(tempDir, "models") {
+		t.Errorf("expected primary models directory first, got %s", allDirs[0])
+	}
+	if allDirs[1] != secDir1 || allDirs[2] != secDir2 {
+		t.Errorf("expected secondary directories in order, got %v", allDirs)
+	}
+
+	if err := cfg.CreateDirectories(); err != nil {
+		t.Fatalf("failed to create directories: %v", err)
+	}
+
+	for _, d := range allDirs {
+		if _, err := os.Stat(d); os.IsNotExist(err) {
+			t.Errorf("expected directory %s to be created on disk", d)
+		}
+	}
+}
+

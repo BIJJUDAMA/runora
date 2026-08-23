@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -59,13 +60,40 @@ func AppDataDir() (string, error) {
 }
 
 type Paths struct {
-	Models      string `json:"models"`
-	LlamaCPP    string `json:"llama_cpp"`
-	OnnxRuntime string `json:"onnxruntime"`
-	Profiles    string `json:"profiles"`
-	Cache       string `json:"cache"`
-	Benchmarks  string `json:"benchmarks"`
-	Downloads   string `json:"downloads"`
+	Models           string   `json:"models"`
+	ModelDirectories []string `json:"model_directories,omitempty"`
+	LlamaCPP         string   `json:"llama_cpp"`
+	OnnxRuntime      string   `json:"onnxruntime"`
+	Profiles         string   `json:"profiles"`
+	Cache            string   `json:"cache"`
+	Benchmarks       string   `json:"benchmarks"`
+	Downloads        string   `json:"downloads"`
+}
+
+// AllModelDirectories returns a deduplicated list of all configured model directory paths,
+// starting with the primary Models directory followed by any secondary ModelDirectories.
+func (p *Paths) AllModelDirectories() []string {
+	var dirs []string
+	seen := make(map[string]bool)
+
+	addDir := func(d string) {
+		trimmed := strings.TrimSpace(d)
+		if trimmed == "" {
+			return
+		}
+		clean := filepath.Clean(trimmed)
+		if !seen[clean] {
+			seen[clean] = true
+			dirs = append(dirs, clean)
+		}
+	}
+
+	addDir(p.Models)
+	for _, d := range p.ModelDirectories {
+		addDir(d)
+	}
+
+	return dirs
 }
 
 type Config struct {
@@ -200,6 +228,9 @@ func LoadFromDir(dir string) (*Config, error) {
 	if cfg.Paths.Downloads == "" {
 		cfg.Paths.Downloads = defaults.Paths.Downloads
 	}
+	if cfg.Paths.ModelDirectories == nil {
+		cfg.Paths.ModelDirectories = []string{}
+	}
 	if cfg.Theme == "" {
 		cfg.Theme = "forest"
 	}
@@ -240,13 +271,14 @@ func DefaultConfig() *Config {
 func defaultConfig(dir string) *Config {
 	return &Config{
 		Paths: Paths{
-			Models:      filepath.Join(dir, "models"),
-			LlamaCPP:    filepath.Join(dir, "llama.cpp"),
-			OnnxRuntime: filepath.Join(dir, "onnxruntime"),
-			Profiles:    filepath.Join(dir, "profiles"),
-			Cache:       filepath.Join(dir, "cache"),
-			Benchmarks:  filepath.Join(dir, "benchmarks"),
-			Downloads:   filepath.Join(dir, "downloads"),
+			Models:           filepath.Join(dir, "models"),
+			ModelDirectories: []string{},
+			LlamaCPP:         filepath.Join(dir, "llama.cpp"),
+			OnnxRuntime:      filepath.Join(dir, "onnxruntime"),
+			Profiles:         filepath.Join(dir, "profiles"),
+			Cache:            filepath.Join(dir, "cache"),
+			Benchmarks:       filepath.Join(dir, "benchmarks"),
+			Downloads:        filepath.Join(dir, "downloads"),
 		},
 		Favorites:           []string{},
 		RecentLaunches:      []string{},
@@ -277,7 +309,7 @@ func (c *Config) Save() error {
 }
 
 func (c *Config) CreateDirectories() error {
-	dirs := []string{
+	dirs := append([]string{
 		c.Paths.Models,
 		c.Paths.LlamaCPP,
 		c.Paths.OnnxRuntime,
@@ -285,7 +317,7 @@ func (c *Config) CreateDirectories() error {
 		c.Paths.Cache,
 		c.Paths.Benchmarks,
 		c.Paths.Downloads,
-	}
+	}, c.Paths.ModelDirectories...)
 	for _, dir := range dirs {
 		if dir == "" {
 			continue
