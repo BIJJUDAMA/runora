@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -37,14 +39,18 @@ type Theme interface {
 	Name() string
 	Description() string
 	Palette() ThemePalette
+	GradientStart() lipgloss.Color
+	GradientEnd() lipgloss.Color
 }
 
 // --- Base Default Theme (Fallback / Standard Terminal Palette) ---
 type BaseTheme struct{}
 
-func (t BaseTheme) ID() string          { return "base" }
-func (t BaseTheme) Name() string        { return "Default" }
-func (t BaseTheme) Description() string { return "Standard terminal default palette" }
+func (t BaseTheme) ID() string                          { return "base" }
+func (t BaseTheme) Name() string                        { return "Default" }
+func (t BaseTheme) Description() string                 { return "Standard terminal default palette" }
+func (t BaseTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t BaseTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t BaseTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#7D56F4"),
@@ -73,9 +79,11 @@ func (t BaseTheme) Palette() ThemePalette {
 // --- Dracula / Dark Purple Theme ---
 type DraculaTheme struct{}
 
-func (t DraculaTheme) ID() string          { return "dracula" }
-func (t DraculaTheme) Name() string        { return "Dracula" }
-func (t DraculaTheme) Description() string { return "Classic dark purple & neon vampire theme" }
+func (t DraculaTheme) ID() string                          { return "dracula" }
+func (t DraculaTheme) Name() string                        { return "Dracula" }
+func (t DraculaTheme) Description() string                 { return "Classic dark purple & neon vampire theme" }
+func (t DraculaTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t DraculaTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t DraculaTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#BD93F9"),
@@ -104,9 +112,11 @@ func (t DraculaTheme) Palette() ThemePalette {
 // --- Forest Theme ---
 type ForestTheme struct{}
 
-func (t ForestTheme) ID() string          { return "forest" }
-func (t ForestTheme) Name() string        { return "Forest" }
-func (t ForestTheme) Description() string { return "Natural emerald greens and warm amber accents" }
+func (t ForestTheme) ID() string                          { return "forest" }
+func (t ForestTheme) Name() string                        { return "Forest" }
+func (t ForestTheme) Description() string                 { return "Natural emerald greens and warm amber accents" }
+func (t ForestTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t ForestTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t ForestTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#2E7D32"),
@@ -135,9 +145,11 @@ func (t ForestTheme) Palette() ThemePalette {
 // --- Nord Theme ---
 type NordTheme struct{}
 
-func (t NordTheme) ID() string          { return "nord" }
-func (t NordTheme) Name() string        { return "Nord" }
-func (t NordTheme) Description() string { return "Arctic, north-bluish clean and elegant palette" }
+func (t NordTheme) ID() string                          { return "nord" }
+func (t NordTheme) Name() string                        { return "Nord" }
+func (t NordTheme) Description() string                 { return "Arctic, north-bluish clean and elegant palette" }
+func (t NordTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t NordTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t NordTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#88C0D0"),
@@ -166,9 +178,11 @@ func (t NordTheme) Palette() ThemePalette {
 // --- Sunset Theme ---
 type SunsetTheme struct{}
 
-func (t SunsetTheme) ID() string          { return "sunset" }
-func (t SunsetTheme) Name() string        { return "Sunset" }
-func (t SunsetTheme) Description() string { return "Warm dusk glow with coral and golden hues" }
+func (t SunsetTheme) ID() string                          { return "sunset" }
+func (t SunsetTheme) Name() string                        { return "Sunset" }
+func (t SunsetTheme) Description() string                 { return "Warm dusk glow with coral and golden hues" }
+func (t SunsetTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t SunsetTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t SunsetTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#FF5F6D"),
@@ -197,9 +211,11 @@ func (t SunsetTheme) Palette() ThemePalette {
 // --- Cyberpunk Theme ---
 type CyberpunkTheme struct{}
 
-func (t CyberpunkTheme) ID() string          { return "cyberpunk" }
-func (t CyberpunkTheme) Name() string        { return "Cyberpunk" }
-func (t CyberpunkTheme) Description() string { return "High-energy neon pink, cyan and electric yellow" }
+func (t CyberpunkTheme) ID() string                          { return "cyberpunk" }
+func (t CyberpunkTheme) Name() string                        { return "Cyberpunk" }
+func (t CyberpunkTheme) Description() string                 { return "High-energy neon pink, cyan and electric yellow" }
+func (t CyberpunkTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t CyberpunkTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t CyberpunkTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#FF007F"),
@@ -228,9 +244,11 @@ func (t CyberpunkTheme) Palette() ThemePalette {
 // --- Monochrome / Clean Minimalist Theme ---
 type MonochromeTheme struct{}
 
-func (t MonochromeTheme) ID() string          { return "monochrome" }
-func (t MonochromeTheme) Name() string        { return "Monochrome" }
-func (t MonochromeTheme) Description() string { return "Ultra-clean grayscale minimalist palette" }
+func (t MonochromeTheme) ID() string                          { return "monochrome" }
+func (t MonochromeTheme) Name() string                        { return "Monochrome" }
+func (t MonochromeTheme) Description() string                 { return "Ultra-clean grayscale minimalist palette" }
+func (t MonochromeTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t MonochromeTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t MonochromeTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#FAFAFA"),
@@ -259,9 +277,11 @@ func (t MonochromeTheme) Palette() ThemePalette {
 // --- Solarized Light Theme (Clean Light Background) ---
 type SolarizedLightTheme struct{}
 
-func (t SolarizedLightTheme) ID() string          { return "solarized-light" }
-func (t SolarizedLightTheme) Name() string        { return "Solarized Light" }
-func (t SolarizedLightTheme) Description() string { return "Classic solarized warm light background palette" }
+func (t SolarizedLightTheme) ID() string                          { return "solarized-light" }
+func (t SolarizedLightTheme) Name() string                        { return "Solarized Light" }
+func (t SolarizedLightTheme) Description() string                 { return "Classic solarized warm light background palette" }
+func (t SolarizedLightTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t SolarizedLightTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t SolarizedLightTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#268BD2"),
@@ -290,9 +310,11 @@ func (t SolarizedLightTheme) Palette() ThemePalette {
 // --- Paper Light Theme (Warm Newsprint / Reader) ---
 type PaperLightTheme struct{}
 
-func (t PaperLightTheme) ID() string          { return "paper-light" }
-func (t PaperLightTheme) Name() string        { return "Paper Light" }
-func (t PaperLightTheme) Description() string { return "Warm ivory parchment background with dark ink text" }
+func (t PaperLightTheme) ID() string                          { return "paper-light" }
+func (t PaperLightTheme) Name() string                        { return "Paper Light" }
+func (t PaperLightTheme) Description() string                 { return "Warm ivory parchment background with dark ink text" }
+func (t PaperLightTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t PaperLightTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t PaperLightTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#1A5FB4"),
@@ -321,9 +343,11 @@ func (t PaperLightTheme) Palette() ThemePalette {
 // --- High Contrast Theme (WCAG AAA Accessible) ---
 type HighContrastTheme struct{}
 
-func (t HighContrastTheme) ID() string          { return "high-contrast" }
-func (t HighContrastTheme) Name() string        { return "High Contrast" }
-func (t HighContrastTheme) Description() string { return "WCAG AAA accessible stark high-contrast palette" }
+func (t HighContrastTheme) ID() string                          { return "high-contrast" }
+func (t HighContrastTheme) Name() string                        { return "High Contrast" }
+func (t HighContrastTheme) Description() string                 { return "WCAG AAA accessible stark high-contrast palette" }
+func (t HighContrastTheme) GradientStart() lipgloss.Color       { return lipgloss.Color(t.Palette().GradientStart) }
+func (t HighContrastTheme) GradientEnd() lipgloss.Color         { return lipgloss.Color(t.Palette().GradientEnd) }
 func (t HighContrastTheme) Palette() ThemePalette {
 	return ThemePalette{
 		Primary:        lipgloss.Color("#00FFFF"),
@@ -630,28 +654,46 @@ func RenderProgressBar(percent float64, width int, filledColor lipgloss.Terminal
 	return filledStyle.Render(filledStr) + emptyStyle.Render(emptyStr)
 }
 
-func parseHexColor(hex string) (r, g, b int) {
-	hex = strings.TrimPrefix(hex, "#")
+func hexToRGB(hex string) (uint8, uint8, uint8) {
+	hex = strings.TrimSpace(strings.TrimPrefix(hex, "#"))
 	if len(hex) == 3 {
-		fmt.Sscanf(string(hex[0])+string(hex[0])+string(hex[1])+string(hex[1])+string(hex[2])+string(hex[2]), "%02x%02x%02x", &r, &g, &b)
+		r, errR := strconv.ParseUint(string(hex[0])+string(hex[0]), 16, 8)
+		g, errG := strconv.ParseUint(string(hex[1])+string(hex[1]), 16, 8)
+		b, errB := strconv.ParseUint(string(hex[2])+string(hex[2]), 16, 8)
+		if errR == nil && errG == nil && errB == nil {
+			return uint8(r), uint8(g), uint8(b)
+		}
 	} else if len(hex) == 6 {
-		fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+		r, errR := strconv.ParseUint(hex[0:2], 16, 8)
+		g, errG := strconv.ParseUint(hex[2:4], 16, 8)
+		b, errB := strconv.ParseUint(hex[4:6], 16, 8)
+		if errR == nil && errG == nil && errB == nil {
+			return uint8(r), uint8(g), uint8(b)
+		}
 	}
-	return
+	return 0, 0, 0
 }
 
-func interpolateColor(startHex, endHex string, fraction float64) lipgloss.Color {
-	r1, g1, b1 := parseHexColor(startHex)
-	r2, g2, b2 := parseHexColor(endHex)
-
-	r := int(float64(r1) + float64(r2-r1)*fraction)
-	g := int(float64(g1) + float64(g2-g1)*fraction)
-	b := int(float64(b1) + float64(b2-b1)*fraction)
-
-	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", r, g, b))
+func parseHexColor(hex string) (r, g, b int) {
+	uR, uG, uB := hexToRGB(hex)
+	return int(uR), int(uG), int(uB)
 }
 
-func RenderGradient(text string, startHex, endHex string) string {
+func interpolateColor(c1, c2 [3]uint8, factor float64) string {
+	if factor < 0 {
+		factor = 0
+	}
+	if factor > 1 {
+		factor = 1
+	}
+	r := uint8(math.Round(float64(c1[0]) + float64(int(c2[0])-int(c1[0]))*factor))
+	g := uint8(math.Round(float64(c1[1]) + float64(int(c2[1])-int(c1[1]))*factor))
+	b := uint8(math.Round(float64(c1[2]) + float64(int(c2[2])-int(c1[2]))*factor))
+	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
+}
+
+// RenderGradientText computes a smooth linear gradient across individual characters.
+func RenderGradientText(text string, startHex, endHex string) string {
 	runes := []rune(text)
 	n := len(runes)
 	if n == 0 {
@@ -661,11 +703,257 @@ func RenderGradient(text string, startHex, endHex string) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(startHex)).Bold(true).Render(text)
 	}
 
+	r1, g1, b1 := hexToRGB(startHex)
+	r2, g2, b2 := hexToRGB(endHex)
+	c1 := [3]uint8{r1, g1, b1}
+	c2 := [3]uint8{r2, g2, b2}
+
 	var sb strings.Builder
 	for i, char := range runes {
-		fraction := float64(i) / float64(n-1)
-		c := interpolateColor(startHex, endHex, fraction)
-		sb.WriteString(lipgloss.NewStyle().Foreground(c).Bold(true).Render(string(char)))
+		factor := float64(i) / float64(n-1)
+		cHex := interpolateColor(c1, c2, factor)
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cHex)).Bold(true).Render(string(char)))
 	}
 	return sb.String()
+}
+
+// RenderGradient is an alias for RenderGradientText for backwards compatibility.
+func RenderGradient(text string, startHex, endHex string) string {
+	return RenderGradientText(text, startHex, endHex)
+}
+
+// RenderGradientBar computes a multi-stop TrueColor gradient progress bar.
+func RenderGradientBar(pct float64, width int, startHex, endHex string) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	if width <= 0 {
+		return ""
+	}
+
+	filledCount := int(math.Round(pct / 100.0 * float64(width)))
+	if filledCount < 0 {
+		filledCount = 0
+	}
+	if filledCount > width {
+		filledCount = width
+	}
+	emptyCount := width - filledCount
+
+	r1, g1, b1 := hexToRGB(startHex)
+	r2, g2, b2 := hexToRGB(endHex)
+	c1 := [3]uint8{r1, g1, b1}
+	c2 := [3]uint8{r2, g2, b2}
+
+	var sb strings.Builder
+	for i := 0; i < filledCount; i++ {
+		factor := 0.0
+		if width > 1 {
+			factor = float64(i) / float64(width-1)
+		}
+		colorHex := interpolateColor(c1, c2, factor)
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorHex)).Render("█"))
+	}
+	if emptyCount > 0 {
+		emptyColor := ColorProgressEmpty
+		if emptyColor == nil {
+			emptyColor = lipgloss.Color("#2E2E2E")
+		}
+		sb.WriteString(lipgloss.NewStyle().Foreground(emptyColor).Render(strings.Repeat("░", emptyCount)))
+	}
+	return sb.String()
+}
+
+// SurfaceCard renders a standardized Bento card surface with rounded borders, title, badge, and dynamic active border.
+func SurfaceCard(title string, content string, width int, active bool, badge string) string {
+	borderColor := ColorBorder
+	if borderColor == nil {
+		borderColor = lipgloss.Color("#3C3C3C")
+	}
+	titleColor := ColorText
+	if titleColor == nil {
+		titleColor = lipgloss.Color("#FAFAFA")
+	}
+	if active {
+		if ColorFocus != nil {
+			borderColor = ColorFocus
+		} else if ColorPrimary != nil {
+			borderColor = ColorPrimary
+		}
+		if ColorPrimary != nil {
+			titleColor = ColorPrimary
+		}
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+
+	var innerWidth int
+	if width > 4 {
+		cardStyle = cardStyle.Width(width - 2)
+		innerWidth = width - 4
+	}
+
+	var headerLine string
+	if title != "" || badge != "" {
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleColor)
+		badgeStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+		if ColorAccent == nil {
+			badgeStyle = badgeStyle.Foreground(lipgloss.Color("#FF5F87"))
+		}
+
+		if title != "" && badge != "" {
+			if innerWidth > 0 {
+				titleW := lipgloss.Width(title)
+				badgeW := lipgloss.Width(badge)
+				spaces := innerWidth - titleW - badgeW
+				if spaces < 1 {
+					spaces = 1
+				}
+				headerLine = titleStyle.Render(title) + strings.Repeat(" ", spaces) + badgeStyle.Render(badge)
+			} else {
+				headerLine = titleStyle.Render(title) + " " + badgeStyle.Render(badge)
+			}
+		} else if title != "" {
+			headerLine = titleStyle.Render(title)
+		} else {
+			headerLine = badgeStyle.Render(badge)
+		}
+	}
+
+	var cardBody string
+	if headerLine != "" && content != "" {
+		cardBody = headerLine + "\n" + content
+	} else if headerLine != "" {
+		cardBody = headerLine
+	} else {
+		cardBody = content
+	}
+
+	return cardStyle.Render(cardBody)
+}
+
+// GlobalTabHeader renders the standardized top navigation bar across all screens.
+func GlobalTabHeader(activeScreen ScreenMode, width int, runningCount int, vramGauge string) string {
+	var activeIndex int = -1
+	switch activeScreen {
+	case ScreenBrowser:
+		activeIndex = 0
+	case ScreenDashboard, ScreenProfileCreator:
+		activeIndex = 1
+	case ScreenServerMonitor, ScreenLogStreamer:
+		activeIndex = 2
+	case ScreenDownloader:
+		activeIndex = 3
+	case ScreenPerformanceDashboard, ScreenBenchmarkProgress:
+		activeIndex = 4
+	case ScreenSettings:
+		activeIndex = 5
+	}
+
+	tab3Label := "[3] Monitor"
+	if runningCount > 0 {
+		tab3Label = fmt.Sprintf("[3] Monitor (%d Active)", runningCount)
+	}
+
+	tabs := []struct {
+		index int
+		label string
+	}{
+		{0, "[1] Models"},
+		{1, "[2] Launch"},
+		{2, tab3Label},
+		{3, "[4] Downloads"},
+		{4, "[5] Bench"},
+		{5, "[6] Settings"},
+	}
+
+	activeBg := ColorSelected
+	if activeBg == nil {
+		activeBg = lipgloss.Color("#2E2E3E")
+	}
+	activeFg := ColorSecondary
+	if activeFg == nil {
+		activeFg = lipgloss.Color("#04B575")
+	}
+	textMuted := ColorTextMuted
+	if textMuted == nil {
+		textMuted = lipgloss.Color("#D0D0D0")
+	}
+	borderColor := ColorBorder
+	if borderColor == nil {
+		borderColor = lipgloss.Color("#3C3C3C")
+	}
+
+	var renderedTabs []string
+	for _, tab := range tabs {
+		if tab.index == activeIndex {
+			tabStyle := lipgloss.NewStyle().
+				Background(activeBg).
+				Foreground(activeFg).
+				Bold(true).
+				Padding(0, 1)
+			renderedTabs = append(renderedTabs, tabStyle.Render("● "+tab.label))
+		} else {
+			tabStyle := lipgloss.NewStyle().
+				Foreground(textMuted).
+				Padding(0, 1)
+			renderedTabs = append(renderedTabs, tabStyle.Render(tab.label))
+		}
+	}
+
+	sep := lipgloss.NewStyle().Foreground(borderColor).Render("│")
+	tabsRow := strings.Join(renderedTabs, sep)
+
+	var vramStr string
+	if vramGauge != "" {
+		vramColor := ColorTextDim
+		if vramColor == nil {
+			vramColor = lipgloss.Color("#808080")
+		}
+		vramStr = lipgloss.NewStyle().Foreground(vramColor).Render(vramGauge)
+	}
+
+	brand := "RUNORA // RUNTIME MANAGER v1.2"
+	if ThemeGradientStart != "" && ThemeGradientEnd != "" {
+		brand = RenderGradientText(brand, ThemeGradientStart, ThemeGradientEnd)
+	} else {
+		primary := ColorPrimary
+		if primary == nil {
+			primary = lipgloss.Color("#7D56F4")
+		}
+		brand = lipgloss.NewStyle().Bold(true).Foreground(primary).Render(brand)
+	}
+
+	var innerWidth int
+	headerBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+
+	if width > 4 {
+		headerBox = headerBox.Width(width - 2)
+		innerWidth = width - 4
+	}
+
+	if vramStr != "" && innerWidth > 0 {
+		tabsW := lipgloss.Width(tabsRow)
+		vramW := lipgloss.Width(vramStr)
+		spaces := innerWidth - tabsW - vramW
+		if spaces > 0 {
+			tabsRow = tabsRow + strings.Repeat(" ", spaces) + vramStr
+		} else {
+			tabsRow = tabsRow + "  " + vramStr
+		}
+	} else if vramStr != "" {
+		tabsRow = tabsRow + "  " + vramStr
+	}
+
+	body := brand + "\n" + tabsRow
+	return headerBox.Render(body)
 }
