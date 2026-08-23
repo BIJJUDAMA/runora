@@ -174,16 +174,6 @@ func (m *DownloaderModel) Update(msg tea.Msg) (*DownloaderModel, tea.Cmd) {
 		case "shift+tab":
 			m.prevFocus()
 
-		case "1", "2", "3", "4":
-			if m.focus == FocusQueue {
-				idx := int(msg.String()[0] - '1')
-				if idx >= 0 && idx < len(CuratedQuickPicks) {
-					qp := CuratedQuickPicks[idx]
-					m.queue.AddTask(qp.Name, qp.FileName, 0, qp.DownloadURL)
-					m.selectedTaskIdx = len(m.queue.GetTasks()) - 1
-				}
-			}
-
 		case "enter":
 			if m.focus == FocusFileList {
 				if len(m.resolvedFiles) > 0 && m.selectedFileIdx >= 0 && m.selectedFileIdx < len(m.resolvedFiles) {
@@ -455,26 +445,6 @@ func (m *DownloaderModel) View(width int, height int) string {
 		inputSb.WriteString("\n\n  " + lipgloss.NewStyle().Foreground(ColorDanger).Bold(true).Render(m.err.Error()))
 	}
 
-	// Middle Bento Card: Curated Model Quick-Picks
-	var qpSb strings.Builder
-	qpSb.WriteString("  ")
-	for i, qp := range CuratedQuickPicks {
-		keyBadge := StyleHelpKey.Render(fmt.Sprintf("[%s]", qp.Index))
-		nameStr := lipgloss.NewStyle().Foreground(ColorText).Bold(true).Render(qp.Name)
-		sizeStr := StyleTagPill.Render(qp.Size)
-		qpItem := fmt.Sprintf("%s %s %s", keyBadge, nameStr, sizeStr)
-
-		if i == 0 || i == 2 {
-			qpSb.WriteString(fmt.Sprintf("%-48s", qpItem))
-			if width < 100 {
-				qpSb.WriteString("\n  ")
-			}
-		} else {
-			qpSb.WriteString(qpItem + "\n  ")
-		}
-	}
-	qpSb.WriteString("\n  " + StyleHelp.Render("Tip: Focus queue [Tab] and press [1-4] to instantly queue a curated model."))
-
 	// Bottom Bento Card: Download Queue & Progress
 	var queueSb strings.Builder
 
@@ -491,7 +461,7 @@ func (m *DownloaderModel) View(width int, height int) string {
 	} else {
 		tasks := m.queue.GetTasks()
 		if len(tasks) == 0 {
-			queueSb.WriteString("  " + StyleMuted.Render("Queue is empty. Enter a direct GGUF/ONNX URL above, or select a Quick-Pick (1-4).") + "\n")
+			queueSb.WriteString("  " + StyleMuted.Render("Queue is empty. Enter a direct GGUF/ONNX download URL or Hugging Face repo above.") + "\n")
 		} else {
 			startHex := ThemeGradientStart
 			if startHex == "" {
@@ -607,60 +577,25 @@ func (m *DownloaderModel) View(width int, height int) string {
 		}
 	}
 
-	// Help Instructions
-	var helpKeys []string
-	if m.focus == FocusFileList {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Move Selection", StyleHelpKey.Render("[Up/Down/j/k]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Download", StyleHelpKey.Render("[Enter]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Cancel", StyleHelpKey.Render("[Esc]")))
-	} else {
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Focus Next", StyleHelpKey.Render("[Tab]")))
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Focus Prev", StyleHelpKey.Render("[Shift+Tab]")))
-		if m.focus == FocusURL || m.focus == FocusFilename {
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Start Download", StyleHelpKey.Render("[Enter]")))
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Paste", StyleHelpKey.Render("[Ctrl+V]")))
-		} else if m.focus == FocusQueue {
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Pause/Resume", StyleHelpKey.Render("[P]")))
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Cancel/Remove", StyleHelpKey.Render("[C]")))
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Clear Finished", StyleHelpKey.Render("[X]")))
-			helpKeys = append(helpKeys, fmt.Sprintf("%s Quick-Pick", StyleHelpKey.Render("[1-4]")))
-		}
-		helpKeys = append(helpKeys, fmt.Sprintf("%s Back to Browser", StyleHelpKey.Render("[Esc]")))
-	}
-
-	helpView := "  " + strings.Join(helpKeys, "  ")
-
 	topContent := strings.TrimRight(inputSb.String(), "\n")
-	midContent := strings.TrimRight(qpSb.String(), "\n")
 	botContent := strings.TrimRight(queueSb.String(), "\n")
 
 	// Calculate balanced card height to fill the available height
 	topHeight := 0
-	midHeight := 0
 	botHeight := 0
-	helpHeight := 1
 	if height > 0 {
-		availHeight := height - helpHeight
-		if availHeight > 18 {
-			topHeight = 8
-			midHeight = 7
-			botHeight = availHeight - topHeight - midHeight
-		} else {
-			topHeight = 0
-			midHeight = 0
-			botHeight = 0
+		if height > 14 {
+			topHeight = 7
+			botHeight = height - topHeight
 		}
 	}
 
 	topCard := SurfaceCardWithHeight("Direct Model Download", topContent, width, topHeight, m.focus == FocusURL || m.focus == FocusFilename, "HuggingFace / Direct")
-	middleCard := SurfaceCardWithHeight("Curated Model Quick-Picks", midContent, width, midHeight, false, "Popular")
 	bottomCard := SurfaceCardWithHeight("Download Queue & Progress", botContent, width, botHeight, m.focus == FocusQueue || m.focus == FocusFileList, fmt.Sprintf("%d active", len(m.queue.GetTasks())))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		topCard,
-		middleCard,
 		bottomCard,
-		helpView,
 	)
 }
 

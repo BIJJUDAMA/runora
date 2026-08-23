@@ -1668,34 +1668,6 @@ func TestBentoDownloaderLayout(t *testing.T) {
 		t.Errorf("expected view to contain badge 'HuggingFace / Direct', got:\n%s", view)
 	}
 
-	// Verify Middle Card (Curated Quick-Picks)
-	if !strings.Contains(view, "Curated Model Quick-Picks") {
-		t.Errorf("expected view to contain 'Curated Model Quick-Picks', got:\n%s", view)
-	}
-	if !strings.Contains(view, "Popular") {
-		t.Errorf("expected view to contain badge 'Popular', got:\n%s", view)
-	}
-
-	// Verify Curated Models & Sizes
-	expectedCurated := []struct {
-		name string
-		size string
-	}{
-		{"1. Llama 3.1 8B Instruct (Q4_K_M)", "4.9 GB"},
-		{"2. Qwen 2.5 7B Instruct (Q4_K_M)", "4.7 GB"},
-		{"3. DeepSeek Coder 6.7B (Q4_K_M)", "4.1 GB"},
-		{"4. Mistral Nemo 12B (Q4_K_M)", "7.5 GB"},
-	}
-
-	for _, cur := range expectedCurated {
-		if !strings.Contains(view, cur.name) {
-			t.Errorf("expected view to contain curated model %q", cur.name)
-		}
-		if !strings.Contains(view, cur.size) {
-			t.Errorf("expected view to contain size %q for %q", cur.size, cur.name)
-		}
-	}
-
 	// Verify Bottom Card (Download Queue)
 	if !strings.Contains(view, "Download Queue & Progress") {
 		t.Errorf("expected view to contain 'Download Queue & Progress', got:\n%s", view)
@@ -1751,22 +1723,7 @@ func TestBentoDownloaderLayout(t *testing.T) {
 		t.Errorf("expected view to contain error message 'connection refused'")
 	}
 
-	// 4. Test quick-pick key handling in FocusQueue
-	dm.focus = FocusQueue
-	dm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
-	tasks := q.GetTasks()
-	foundQwen := false
-	for _, t := range tasks {
-		if strings.Contains(t.FileName, "qwen2.5-7b-instruct-q4_k_m.gguf") {
-			foundQwen = true
-			break
-		}
-	}
-	if !foundQwen {
-		t.Errorf("expected quick-pick '2' to enqueue Qwen 2.5 model")
-	}
-
-	// 5. Assert strict ZERO emojis
+	// 4. Assert strict ZERO emojis
 	assertZeroEmojis := func(stateName string, content string) {
 		for _, r := range content {
 			if (r >= 0x1F600 && r <= 0x1F64F) || // Emoticons
