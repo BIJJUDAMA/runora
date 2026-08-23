@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"runtime/debug"
 	"strings"
-	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/BIJJUDAMA/runora/config"
@@ -51,15 +49,6 @@ func main() {
 	}
 
 	srv := runner.NewMultiRuntimeManager(cfg.Paths.Cache)
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		_ = srv.Stop()
-		os.Exit(0)
-	}()
-
 	defer func() {
 		_ = srv.Stop()
 	}()
