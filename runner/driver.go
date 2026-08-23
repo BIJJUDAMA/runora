@@ -1,4 +1,4 @@
-﻿package runner
+package runner
 
 import (
 	"context"
@@ -44,6 +44,12 @@ func (d *LlamaCppDriver) BuildCommand(ctx context.Context, modelPath string, opt
 		binaryName = "llama-server.exe"
 	}
 	binaryPath := filepath.Join(opts.LlamaCppDir, binaryName)
+	if opts.VersionTag != "" {
+		slotBinary := filepath.Join(opts.LlamaCppDir, "versions", opts.VersionTag, binaryName)
+		if _, err := os.Stat(slotBinary); err == nil {
+			binaryPath = slotBinary
+		}
+	}
 
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("llama-server binary not found at %s", binaryPath)
@@ -72,6 +78,9 @@ func (d *LlamaCppDriver) BuildCommand(ctx context.Context, modelPath string, opt
 		args = append(args, "--reranking")
 	}
 
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	if logFile != nil {
 		cmd.Stdout = logFile

@@ -1,4 +1,4 @@
-﻿package runner
+package runner
 
 import (
 	"fmt"
@@ -47,6 +47,8 @@ type StartOptions struct {
 	Host        string
 	Port        int
 	Task        TaskType
+	Backend     BackendType
+	VersionTag  string
 }
 
 type ModelRuntime interface {
@@ -115,4 +117,11 @@ func (m *MultiRuntimeManager) Capabilities() []TaskType {
 
 func (m *MultiRuntimeManager) Supervisor() *ProcessSupervisor {
 	return m.supervisor
+}
+
+func (m *MultiRuntimeManager) LogDir() string {
+	if m.supervisor != nil {
+		return m.supervisor.LogDir()
+	}
+	return ""
 }
