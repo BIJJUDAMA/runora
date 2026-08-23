@@ -22,10 +22,11 @@ import (
 )
 
 type GithubRelease struct {
-	TagName string         `json:"tag_name"`
-	Name    string         `json:"name"`
-	Body    string         `json:"body"`
-	Assets  []ReleaseAsset `json:"assets"`
+	TagName    string         `json:"tag_name"`
+	NightlyTag string         `json:"nightly_tag,omitempty"`
+	Name       string         `json:"name"`
+	Body       string         `json:"body"`
+	Assets     []ReleaseAsset `json:"assets"`
 }
 
 type ReleaseAsset struct {
@@ -120,6 +121,7 @@ func CheckLatestRelease() (*GithubRelease, error) {
 			if tagErr == nil && nightlyTag != "" {
 				tagRel, tagRelErr := fetchLatestRelease("https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/" + nightlyTag)
 				if tagRelErr == nil && len(tagRel.Assets) > 0 {
+					tagRel.NightlyTag = nightlyTag
 					tagRel.TagName = rel.TagName
 					tagRel.Name = fmt.Sprintf("%s (%s)", rel.TagName, nightlyTag)
 					return tagRel, nil
@@ -364,12 +366,13 @@ func MatchAsset(release *GithubRelease, specs *hardware.HardwareSpecs) (mainAsse
 		score := 100
 
 		// 3. Architecture check
-		if strings.ToLower(specs.OS) == "darwin" || strings.ToLower(specs.OS) == "macos" {
-			if strings.Contains(nameLower, "arm64") {
+		isArm := runtime.GOARCH == "arm64" || (specs != nil && strings.Contains(strings.ToLower(specs.CPU.Model), "apple"))
+		if isArm {
+			if strings.Contains(nameLower, "arm64") || strings.Contains(nameLower, "aarch64") {
 				score += 50
 			}
 		} else {
-			if strings.Contains(nameLower, "x64") || strings.Contains(nameLower, "x86_64") || strings.Contains(nameLower, "amd64") {
+			if strings.Contains(nameLower, "x64") || strings.Contains(nameLower, "x86_64") || strings.Contains(nameLower, "amd64") || strings.Contains(nameLower, "win64") {
 				score += 30
 			}
 		}
@@ -800,7 +803,8 @@ func DownloadRelease(url string, destPath string, progressChan chan float64) err
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "llama-manager-updater")
+	applyAuthHeader(req)
+	req.Header.Set("User-Agent", "runora-updater")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -821,7 +825,10 @@ func DownloadRelease(url string, destPath string, progressChan chan float64) err
 	totalSize := resp.ContentLength
 	var downloaded int64
 
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, 128*1024)
+	lastEmission := time.Now()
+	var lastPct float64
+
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
@@ -831,7 +838,15 @@ func DownloadRelease(url string, destPath string, progressChan chan float64) err
 			}
 			downloaded += int64(n)
 			if totalSize > 0 && progressChan != nil {
-				progressChan <- float64(downloaded) / float64(totalSize)
+				pct := float64(downloaded) / float64(totalSize)
+				if time.Since(lastEmission) > 50*time.Millisecond || pct-lastPct >= 0.01 || pct >= 1.0 {
+					select {
+					case progressChan <- pct:
+						lastEmission = time.Now()
+						lastPct = pct
+					default:
+					}
+				}
 			}
 		}
 		if rerr != nil {
@@ -839,6 +854,13 @@ func DownloadRelease(url string, destPath string, progressChan chan float64) err
 				break
 			}
 			return rerr
+		}
+	}
+
+	if progressChan != nil {
+		select {
+		case progressChan <- 1.0:
+		default:
 		}
 	}
 
@@ -1026,29 +1048,22 @@ func copyDirOrFile(src string, dst string) error {
 	return copyFile(src, dst)
 }
 
-// CreateBackup backs up the src folder to backupDst atomically.
+// CreateBackup backs up the src folder to backupDst safely.
 func CreateBackup(src string, backupDst string) error {
-	_ = os.RemoveAll(backupDst)
-
-	if err := os.Rename(src, backupDst); err == nil {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return nil
 	}
-
+	_ = os.RemoveAll(backupDst)
 	return copyDir(src, backupDst)
 }
 
-// RollbackBackup restores the backup directory.
+// RollbackBackup restores the backup directory safely without destroying the backup.
 func RollbackBackup(backupSrc string, dst string) error {
 	if _, err := os.Stat(backupSrc); os.IsNotExist(err) {
 		return fmt.Errorf("backup does not exist")
 	}
 
 	_ = os.RemoveAll(dst)
-
-	if err := os.Rename(backupSrc, dst); err == nil {
-		return nil
-	}
-
 	return copyDir(backupSrc, dst)
 }
 
