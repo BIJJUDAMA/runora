@@ -303,3 +303,95 @@ func TestProfileNewFields(t *testing.T) {
 	}
 }
 
+func TestProfileValidationBoundaryCases(t *testing.T) {
+	baseProfile := func() Profile {
+		return Profile{
+			Name:      "BoundaryTest",
+			Context:   2048,
+			Threads:   4,
+			GPULayers: 33,
+			BatchSize: 512,
+			Host:      "127.0.0.1",
+			Port:      8080,
+		}
+	}
+
+	// 1. Context Boundaries: 256 (valid), 255 (invalid)
+	p256 := baseProfile()
+	p256.Context = 256
+	if err := p256.Validate(); err != nil {
+		t.Errorf("expected Context=256 to be valid, got: %v", err)
+	}
+	p255 := baseProfile()
+	p255.Context = 255
+	if err := p255.Validate(); err == nil {
+		t.Errorf("expected Context=255 to fail validation")
+	}
+
+	// 2. Port Boundaries: 1024, 65535 (valid), 1023, 65536 (invalid)
+	p1024 := baseProfile()
+	p1024.Port = 1024
+	if err := p1024.Validate(); err != nil {
+		t.Errorf("expected Port=1024 to be valid, got: %v", err)
+	}
+	p65535 := baseProfile()
+	p65535.Port = 65535
+	if err := p65535.Validate(); err != nil {
+		t.Errorf("expected Port=65535 to be valid, got: %v", err)
+	}
+	p1023 := baseProfile()
+	p1023.Port = 1023
+	if err := p1023.Validate(); err == nil {
+		t.Errorf("expected Port=1023 to fail validation")
+	}
+	p65536 := baseProfile()
+	p65536.Port = 65536
+	if err := p65536.Validate(); err == nil {
+		t.Errorf("expected Port=65536 to fail validation")
+	}
+
+	// 3. GPU Layers Boundaries: 0, 999 (valid), -1, 1000 (invalid)
+	pGPU0 := baseProfile()
+	pGPU0.GPULayers = 0
+	if err := pGPU0.Validate(); err != nil {
+		t.Errorf("expected GPULayers=0 to be valid, got: %v", err)
+	}
+	pGPU999 := baseProfile()
+	pGPU999.GPULayers = 999
+	if err := pGPU999.Validate(); err != nil {
+		t.Errorf("expected GPULayers=999 to be valid, got: %v", err)
+	}
+	pGPUNeg := baseProfile()
+	pGPUNeg.GPULayers = -1
+	if err := pGPUNeg.Validate(); err == nil {
+		t.Errorf("expected GPULayers=-1 to fail validation")
+	}
+	pGPU1000 := baseProfile()
+	pGPU1000.GPULayers = 1000
+	if err := pGPU1000.Validate(); err == nil {
+		t.Errorf("expected GPULayers=1000 to fail validation")
+	}
+
+	// 4. BatchSize Boundaries: 0 (default fallback), 1, 8192 (valid), 8193 (invalid)
+	pBatch0 := baseProfile()
+	pBatch0.BatchSize = 0
+	if err := pBatch0.Validate(); err != nil {
+		t.Errorf("expected BatchSize=0 to be valid, got: %v", err)
+	}
+	pBatch1 := baseProfile()
+	pBatch1.BatchSize = 1
+	if err := pBatch1.Validate(); err != nil {
+		t.Errorf("expected BatchSize=1 to be valid, got: %v", err)
+	}
+	pBatch8192 := baseProfile()
+	pBatch8192.BatchSize = 8192
+	if err := pBatch8192.Validate(); err != nil {
+		t.Errorf("expected BatchSize=8192 to be valid, got: %v", err)
+	}
+	pBatch8193 := baseProfile()
+	pBatch8193.BatchSize = 8193
+	if err := pBatch8193.Validate(); err == nil {
+		t.Errorf("expected BatchSize=8193 to fail validation")
+	}
+}
+

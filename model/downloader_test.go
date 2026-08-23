@@ -1,9 +1,13 @@
 package model
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDownloadQueueFlow(t *testing.T) {
@@ -138,6 +142,87 @@ func TestClearAndRemoveTasks(t *testing.T) {
 	q.RemoveTask(t2)
 	if len(q.GetTasks()) != 0 {
 		t.Errorf("expected 0 tasks remaining after RemoveTask")
+	}
+}
+
+func TestDownloaderHTTPRangeResumptionEndToEnd(t *testing.T) {
+	fullPayload := []byte("The quick brown fox jumps over the lazy dog. 1234567890! Local GGUF streaming works.")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader == "" {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fullPayload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(fullPayload)
+			return
+		}
+
+		// Parse "bytes=X-"
+		var start int
+		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-", &start); err != nil || start >= len(fullPayload) {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(fullPayload)-1, len(fullPayload)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fullPayload)-start))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(fullPayload[start:])
+	}))
+	defer server.Close()
+
+	tempDir, err := os.MkdirTemp("", "llama-range-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	q := NewDownloadQueue(tempDir, "")
+
+	// 1. Pre-seed partial .part file with first 10 bytes
+	destDir := filepath.Join(tempDir, "test_repo")
+	_ = os.MkdirAll(destDir, 0755)
+	destPath := filepath.Join(destDir, "sample.gguf")
+	partPath := destPath + ".part"
+	_ = os.WriteFile(partPath, fullPayload[:10], 0644)
+
+	task := q.AddTask("test/repo", "sample.gguf", int64(len(fullPayload)), server.URL+"/sample.gguf")
+
+	// Wait for task to complete (or fail)
+	done := false
+	for i := 0; i < 30; i++ {
+		time.Sleep(100 * time.Millisecond)
+		task.mu.Lock()
+		st := task.Status
+		task.mu.Unlock()
+		if st == StatusCompleted || st == StatusFailed {
+			done = true
+			break
+		}
+	}
+
+	if !done {
+		t.Fatalf("download task did not complete in time")
+	}
+
+	task.mu.Lock()
+	finalStatus := task.Status
+	task.mu.Unlock()
+
+	if finalStatus != StatusCompleted {
+		t.Fatalf("expected task StatusCompleted, got %d (err: %v)", finalStatus, task.Error)
+	}
+
+	// Verify complete file on disk
+	downloadedBytes, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("failed to read downloaded file: %v", err)
+	}
+	if string(downloadedBytes) != string(fullPayload) {
+		t.Errorf("downloaded content mismatch:\nGot:  %q\nWant: %q", string(downloadedBytes), string(fullPayload))
+	}
+	if _, err := os.Stat(partPath); !os.IsNotExist(err) {
+		t.Errorf("expected .part file to be removed upon download completion")
 	}
 }
 

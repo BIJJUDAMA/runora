@@ -292,3 +292,62 @@ func TestDashboardModel_NilSpecsAndModelFallbacks(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileGrid2DNavigationAndBoundaryClamping(t *testing.T) {
+	meta, specs, _ := createTestModelAndSpecs()
+
+	// 1. Single profile test
+	singleList := []*profile.Profile{{Name: "Solo"}}
+	dashSingle := NewDashboardModel(meta, specs, singleList, "Solo")
+	dashSingle.MoveProfile(-1, 0)
+	if dashSingle.ActiveIdx != 0 {
+		t.Errorf("expected index 0 on left clamp for single profile, got %d", dashSingle.ActiveIdx)
+	}
+	dashSingle.MoveProfile(1, 0)
+	if dashSingle.ActiveIdx != 0 {
+		t.Errorf("expected index 0 on right clamp for single profile, got %d", dashSingle.ActiveIdx)
+	}
+	dashSingle.MoveProfile(0, -1)
+	if dashSingle.ActiveIdx != 0 {
+		t.Errorf("expected index 0 on up clamp for single profile, got %d", dashSingle.ActiveIdx)
+	}
+	dashSingle.MoveProfile(0, 1)
+	if dashSingle.ActiveIdx != 0 {
+		t.Errorf("expected index 0 on down clamp for single profile, got %d", dashSingle.ActiveIdx)
+	}
+
+	// 2. 12 profiles test (3 rows: 5, 5, 2)
+	twelveList := make([]*profile.Profile, 12)
+	for i := 0; i < 12; i++ {
+		twelveList[i] = &profile.Profile{Name: strings.Repeat("P", i+1)}
+	}
+	dash12 := NewDashboardModel(meta, specs, twelveList, twelveList[0].Name)
+
+	// Move down 3 times: 0 -> 5 -> 10 -> (15 clamped to 11)
+	dash12.MoveProfile(0, 1)
+	if dash12.ActiveIdx != 5 {
+		t.Errorf("expected profile index 5, got %d", dash12.ActiveIdx)
+	}
+	dash12.MoveProfile(0, 1)
+	if dash12.ActiveIdx != 10 {
+		t.Errorf("expected profile index 10, got %d", dash12.ActiveIdx)
+	}
+	dash12.MoveProfile(0, 1)
+	if dash12.ActiveIdx != 11 {
+		t.Errorf("expected profile index 11 (clamped to end of last row), got %d", dash12.ActiveIdx)
+	}
+
+	// Move up beyond top row: 11 -> 6 -> 1 -> (should clamp to 0 or 1, not negative)
+	dash12.MoveProfile(0, -1)
+	if dash12.ActiveIdx != 6 {
+		t.Errorf("expected profile index 6, got %d", dash12.ActiveIdx)
+	}
+	dash12.MoveProfile(0, -1)
+	if dash12.ActiveIdx != 1 {
+		t.Errorf("expected profile index 1, got %d", dash12.ActiveIdx)
+	}
+	dash12.MoveProfile(0, -1)
+	if dash12.ActiveIdx != 0 {
+		t.Errorf("expected profile index 0 (clamped to top row), got %d", dash12.ActiveIdx)
+	}
+}

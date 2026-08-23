@@ -151,11 +151,16 @@ func AtomicWriteFile(filename string, data []byte, perm os.FileMode) error {
 
 	if err := os.Rename(tmpName, filename); err != nil {
 		if runtime.GOOS == "windows" {
-			_ = os.Remove(filename)
-			if rerr := os.Rename(tmpName, filename); rerr != nil {
-				return fmt.Errorf("could not atomic rename %s to %s: %w", tmpName, filename, rerr)
+			var rerr error
+			for attempt := 0; attempt < 10; attempt++ {
+				_ = os.Remove(filename)
+				rerr = os.Rename(tmpName, filename)
+				if rerr == nil {
+					return nil
+				}
+				time.Sleep(time.Duration(10*(attempt+1)) * time.Millisecond)
 			}
-			return nil
+			return fmt.Errorf("could not atomic rename %s to %s: %w", tmpName, filename, rerr)
 		}
 		return fmt.Errorf("could not atomic rename %s to %s: %w", tmpName, filename, err)
 	}

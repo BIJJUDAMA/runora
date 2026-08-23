@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -412,6 +413,122 @@ func TestConfigAPITokens(t *testing.T) {
 			t.Errorf("expected reloaded HuggingFaceToken %q, got %q", "hf_token_secret_456", reloaded.HuggingFaceToken)
 		}
 	})
+}
+
+func TestCorruptedConfigSelfHealingAndBackup(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "runora-corrupt-config-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	configPath := filepath.Join(tempDir, configFileName)
+	corruptData := []byte("INVALID_JSON_CORRUPT{broken_syntax: true,")
+	if err := os.WriteFile(configPath, corruptData, 0644); err != nil {
+		t.Fatalf("failed to write corrupt config: %v", err)
+	}
+
+	// LoadFromDir should heal itself, create .corrupted backup, and return valid config
+	cfg, err := LoadFromDir(tempDir)
+	if err != nil {
+		t.Fatalf("expected LoadFromDir to self-heal without error, got: %v", err)
+	}
+	if cfg == nil {
+		t.Fatalf("expected non-nil config returned")
+	}
+
+	// Verify .corrupted backup file was generated
+	files, _ := os.ReadDir(tempDir)
+	foundBackup := false
+	for _, f := range files {
+		if strings.Contains(f.Name(), ".corrupted") {
+			foundBackup = true
+			backupData, _ := os.ReadFile(filepath.Join(tempDir, f.Name()))
+			if string(backupData) != string(corruptData) {
+				t.Errorf("backup data mismatch, got %q, expected %q", string(backupData), string(corruptData))
+			}
+			break
+		}
+	}
+	if !foundBackup {
+		t.Errorf("expected .corrupted backup file to be created in %s", tempDir)
+	}
+
+	// Verify new valid config was saved
+	savedData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read restored config: %v", err)
+	}
+	var testUnmarshal map[string]interface{}
+	if err := json.Unmarshal(savedData, &testUnmarshal); err != nil {
+		t.Errorf("restored config is not valid JSON: %v", err)
+	}
+}
+
+func TestAtomicWriteFileConcurrentSafety(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "runora-atomic-write-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	targetFile := filepath.Join(tempDir, "concurrent_target.json")
+
+	doneCh := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		go func(idx int) {
+			data := []byte(fmt.Sprintf(`{"worker": %d, "timestamp": %d}`, idx, idx*1000))
+			doneCh <- AtomicWriteFile(targetFile, data, 0644)
+		}(i)
+	}
+
+	for i := 0; i < 20; i++ {
+		if err := <-doneCh; err != nil {
+			t.Errorf("concurrent AtomicWriteFile %d failed: %v", i, err)
+		}
+	}
+
+	// Verify final file is valid JSON and not corrupt/torn
+	finalData, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("failed to read target file: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(finalData, &parsed); err != nil {
+		t.Errorf("final file is corrupt after concurrent writes: %v, content:\n%s", err, string(finalData))
+	}
+}
+
+func TestFavoriteTogglingAndRecentLaunchesLimits(t *testing.T) {
+	cfg := defaultConfig("")
+
+	// 1. Test ToggleFavorite
+	if cfg.IsFavorite("model-a") {
+		t.Errorf("expected model-a to not be favorite initially")
+	}
+	cfg.ToggleFavorite("model-a")
+	if !cfg.IsFavorite("model-a") {
+		t.Errorf("expected model-a to be favorite after toggle")
+	}
+	cfg.ToggleFavorite("model-a")
+	if cfg.IsFavorite("model-a") {
+		t.Errorf("expected model-a to not be favorite after second toggle")
+	}
+
+	// 2. Test RecordLaunch and deduplication
+	for i := 0; i < 15; i++ {
+		cfg.RecordLaunch(fmt.Sprintf("model-%d", i))
+	}
+	// Re-record recent model
+	cfg.RecordLaunch("model-5")
+
+	if len(cfg.RecentLaunches) == 0 {
+		t.Fatalf("expected non-empty recent launches")
+	}
+	// Latest launched model must be at index 0
+	if cfg.RecentLaunches[0] != "model-5" {
+		t.Errorf("expected most recent launch to be 'model-5' at index 0, got %s", cfg.RecentLaunches[0])
+	}
 }
 
 

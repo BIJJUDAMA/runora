@@ -526,3 +526,87 @@ func TestMultiGPUSpecs(t *testing.T) {
 	}
 }
 
+func TestMemoryEstimateBoundaryAndZeroValues(t *testing.T) {
+	specs := &HardwareSpecs{
+		OS: "Windows",
+		RAM: RAMSpecs{
+			Total:     32 * 1024 * 1024 * 1024,
+			Available: 24 * 1024 * 1024 * 1024,
+		},
+		GPU: GPUSpecs{
+			Name: "RTX 4070",
+			VRAM: 12 * 1024 * 1024 * 1024,
+			Type: "CUDA",
+		},
+	}
+
+	// 1. Model with zero layers and heads (fallback heuristics should not divide by zero or panic)
+	zeroMeta := &model.GGUFMetadata{
+		FileSize:     4 * 1024 * 1024 * 1024,
+		Layers:       0,
+		Heads:        0,
+		HeadsKV:      0,
+		EmbeddingLen: 0,
+	}
+	estZero := EstimateMemory(zeroMeta, specs, 4096)
+	if estZero.TotalMemory == 0 {
+		t.Errorf("expected non-zero total memory estimate even with zero metadata fields")
+	}
+	if estZero.Suitability == SuitabilityExceeds {
+		t.Errorf("4GB model on 12GB VRAM should fit VRAM, got %d", estZero.Suitability)
+	}
+
+	// 2. Extreme context size (128k tokens)
+	metaLarge := &model.GGUFMetadata{
+		FileSize:     8 * 1024 * 1024 * 1024,
+		Layers:       32,
+		Heads:        32,
+		HeadsKV:      8,
+		EmbeddingLen: 4096,
+	}
+	est128k := EstimateMemory(metaLarge, specs, 131072)
+	if est128k.KVCacheSize <= estZero.KVCacheSize {
+		t.Errorf("128k context KV cache size (%d) should be significantly larger than 4k (%d)", est128k.KVCacheSize, estZero.KVCacheSize)
+	}
+
+	// 3. Zero RAM / Zero VRAM specs (should classify as Exceeds or CPU-only without crashing)
+	zeroSpecs := &HardwareSpecs{}
+	estNoHW := EstimateMemory(metaLarge, zeroSpecs, 2048)
+	if estNoHW.Suitability != SuitabilityExceeds {
+		t.Errorf("expected SuitabilityExceeds for zero hardware specs, got %d", estNoHW.Suitability)
+	}
+}
+
+func TestMultiGPUTensorSplitAdvisorEdgeCases(t *testing.T) {
+	// 1. 3-GPU setup: 16GB, 12GB, 8GB (GCD = 4GB -> "4,3,2")
+	gpus3 := []GPUSpecs{
+		{Name: "GPU 1", VRAM: 16 * 1024 * 1024 * 1024},
+		{Name: "GPU 2", VRAM: 12 * 1024 * 1024 * 1024},
+		{Name: "GPU 3", VRAM: 8 * 1024 * 1024 * 1024},
+	}
+	if ratio := TensorSplitAdvisor(gpus3); ratio != "4,3,2" {
+		t.Errorf("expected ratio '4,3,2', got %q", ratio)
+	}
+
+	// 2. 4 identical GPUs: 8GB each -> "1,1,1,1"
+	gpus4Identical := []GPUSpecs{
+		{Name: "GPU 1", VRAM: 8 * 1024 * 1024 * 1024},
+		{Name: "GPU 2", VRAM: 8 * 1024 * 1024 * 1024},
+		{Name: "GPU 3", VRAM: 8 * 1024 * 1024 * 1024},
+		{Name: "GPU 4", VRAM: 8 * 1024 * 1024 * 1024},
+	}
+	if ratio := TensorSplitAdvisor(gpus4Identical); ratio != "1,1,1,1" {
+		t.Errorf("expected ratio '1,1,1,1', got %q", ratio)
+	}
+
+	// 3. One GPU with 0 VRAM -> should compute "1,0" to allocate all weights to GPU 1
+	gpusWithZero := []GPUSpecs{
+		{Name: "GPU 1", VRAM: 16 * 1024 * 1024 * 1024},
+		{Name: "GPU 2 (Display Only)", VRAM: 0},
+	}
+	ratio := TensorSplitAdvisor(gpusWithZero)
+	if ratio != "1,0" {
+		t.Errorf("expected ratio '1,0' for 16GB + 0GB, got %q", ratio)
+	}
+}
+

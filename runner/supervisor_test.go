@@ -248,3 +248,19 @@ func TestMultiRuntimeManagerUnified(t *testing.T) {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
+
+func TestMultiRuntimeRoutingByExtension(t *testing.T) {
+	mgr := NewMultiRuntimeManager("")
+
+	// Unsupported extension should fail immediately
+	err := mgr.Start("models/unknown.bin", StartOptions{Host: "127.0.0.1", Port: 50505})
+	if err == nil {
+		t.Errorf("expected error starting .bin, got nil")
+	}
+
+	// Supported capabilities list should combine both engines
+	caps := mgr.Capabilities()
+	if len(caps) == 0 {
+		t.Errorf("expected non-empty capabilities from MultiRuntimeManager")
+	}
+}
