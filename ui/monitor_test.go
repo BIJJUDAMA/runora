@@ -1,20 +1,32 @@
-﻿package ui
+package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/BIJJUDAMA/runora/config"
+	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
 )
 
 type mockMonitorRuntime struct {
-	instances []runner.InstanceInfo
-	stopped   []int
+	instances  []runner.InstanceInfo
+	stopped    []int
+	allStopped bool
+	started    []string
 }
 
-func (m *mockMonitorRuntime) Start(modelPath string, opts runner.StartOptions) error { return nil }
-func (m *mockMonitorRuntime) Stop() error { return nil }
+func (m *mockMonitorRuntime) Start(modelPath string, opts runner.StartOptions) error {
+	m.started = append(m.started, modelPath)
+	return nil
+}
+func (m *mockMonitorRuntime) Stop() error {
+	m.allStopped = true
+	m.instances = nil
+	return nil
+}
 func (m *mockMonitorRuntime) StopInstance(port int) error {
 	m.stopped = append(m.stopped, port)
 	for i, inst := range m.instances {
@@ -129,5 +141,87 @@ func TestMonitorModel_AsyncMetricsPolling(t *testing.T) {
 	}
 	if len(mockRuntime.stopped) != 1 || mockRuntime.stopped[0] != 8080 {
 		t.Errorf("expected port 8080 to be stopped, got %v", mockRuntime.stopped)
+	}
+}
+
+func TestMonitorModel_SlotsGaugesAndControls(t *testing.T) {
+	mockRuntime := &mockMonitorRuntime{
+		instances: []runner.InstanceInfo{
+			{
+				PID:       2222,
+				Port:      8080,
+				ModelPath: "models/qwen2.5.gguf",
+				Uptime:    100 * time.Second,
+				LogFile:   "logs/server-8080.log",
+			},
+		},
+	}
+
+	cfg := config.DefaultConfig()
+	profs := []*profile.Profile{
+		{Name: "High", Context: 8192, Threads: 8, GPULayers: 33, BatchSize: 512, Port: 8080},
+	}
+	model := NewMonitorModelWithConfig(mockRuntime, cfg, profs)
+	model.Refresh()
+
+	// 1. Inject slots metrics and generation speed metrics
+	metricsMsg := MonitorMetricsMsg{
+		Instances: mockRuntime.instances,
+		CachedMem: map[int]string{2222: "1500.00 MB"},
+		CachedReqs: map[int]string{8080: "42 requests"},
+		CachedSlots: map[int]*runner.ServerSlotMetrics{
+			8080: {
+				TotalNCtx:   8192,
+				TotalNPast:  5324,
+				PctUsed:     65.0,
+				ActiveSlots: 1,
+				TotalSlots:  1,
+			},
+		},
+		CachedSpeed: map[int]string{
+			8080: "28.5 tokens/sec",
+		},
+	}
+	_ = model.Update(metricsMsg)
+
+	// Render view and check context window gauge and speed
+	view := model.View(100, 30)
+	if !strings.Contains(view, "65% (5324 / 8192)") {
+		t.Errorf("expected context slot gauge '65%% (5324 / 8192)' in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "28.5 tokens/sec") {
+		t.Errorf("expected speed '28.5 tokens/sec' in view, got:\n%s", view)
+	}
+
+	// 2. Test Hot Restart ([R])
+	restartCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if restartCmd == nil {
+		t.Errorf("expected restart command to return PollMetricsCmd")
+	}
+	if len(mockRuntime.started) != 1 || mockRuntime.started[0] != "models/qwen2.5.gguf" {
+		t.Errorf("expected server to be restarted with models/qwen2.5.gguf, got %v", mockRuntime.started)
+	}
+
+	// 3. Test Log streamer trigger ([L])
+	logCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	if logCmd == nil {
+		t.Fatalf("expected log streamer command from [L], got nil")
+	}
+	msg := logCmd()
+	openMsg, ok := msg.(OpenLogStreamerMsg)
+	if !ok {
+		t.Fatalf("expected OpenLogStreamerMsg from [L], got %T", msg)
+	}
+	if openMsg.Port != 8080 || openMsg.PrevScreen != ScreenServerMonitor {
+		t.Errorf("unexpected OpenLogStreamerMsg content: %+v", openMsg)
+	}
+
+	// 4. Test Bulk Terminate (Ctrl+K)
+	bulkCmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if bulkCmd == nil {
+		t.Errorf("expected bulk terminate command from Ctrl+K")
+	}
+	if !mockRuntime.allStopped {
+		t.Errorf("expected allStopped to be true after Ctrl+K")
 	}
 }
