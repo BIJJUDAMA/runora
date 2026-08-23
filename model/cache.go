@@ -49,5 +49,9 @@ func (c *MetadataCache) Save(cachePath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cachePath, data, 0644)
+	tmpPath := cachePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return ReplaceFile(tmpPath, cachePath)
 }
