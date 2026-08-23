@@ -1,27 +1,45 @@
-package ui
+﻿package ui
 
 import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/runner"
 )
 
+type MonitorTickMsg struct{}
+
+type MonitorMetricsMsg struct {
+	Instances  []runner.InstanceInfo
+	CachedMem  map[int]string
+	CachedReqs map[int]string
+}
+
+func MonitorTickCmd() tea.Cmd {
+	return tea.Tick(1500*time.Millisecond, func(t time.Time) tea.Msg {
+		return MonitorTickMsg{}
+	})
+}
+
 type MonitorModel struct {
-	srvRunner     runner.ModelRuntime
-	instances     []runner.InstanceInfo
-	selected      int
-	width, height int
+	srvRunner  runner.ModelRuntime
+	instances  []runner.InstanceInfo
+	selected   int
+	cachedMem  map[int]string
+	cachedReqs map[int]string
 }
 
 func NewMonitorModel(srv runner.ModelRuntime) *MonitorModel {
 	return &MonitorModel{
-		srvRunner: srv,
-		instances: []runner.InstanceInfo{},
-		selected:  0,
+		srvRunner:  srv,
+		instances:  []runner.InstanceInfo{},
+		selected:   0,
+		cachedMem:  make(map[int]string),
+		cachedReqs: make(map[int]string),
 	}
 }
 
@@ -35,10 +53,55 @@ func (m *MonitorModel) Refresh() {
 	}
 }
 
-func (m *MonitorModel) Update(msg tea.Msg) tea.Cmd {
-	m.Refresh()
+func (m *MonitorModel) PollMetricsCmd() tea.Cmd {
+	srv := m.srvRunner
+	return func() tea.Msg {
+		instances := srv.GetAllInstances()
+		memMap := make(map[int]string, len(instances))
+		reqsMap := make(map[int]string, len(instances))
+		for _, inst := range instances {
+			mem, err := runner.GetMemoryUsage(inst.PID)
+			if err == nil {
+				memMap[inst.PID] = fmt.Sprintf("%.2f MB", mem)
+			} else {
+				memMap[inst.PID] = "N/A"
+			}
+			reqs, err := runner.QueryServerRequests(inst.Port)
+			if err == nil {
+				reqsMap[inst.Port] = fmt.Sprintf("%d requests", reqs)
+			} else {
+				reqsMap[inst.Port] = "0 requests"
+			}
+		}
+		return MonitorMetricsMsg{
+			Instances:  instances,
+			CachedMem:  memMap,
+			CachedReqs: reqsMap,
+		}
+	}
+}
 
+func (m *MonitorModel) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case MonitorTickMsg:
+		return tea.Batch(m.PollMetricsCmd(), MonitorTickCmd())
+
+	case MonitorMetricsMsg:
+		m.instances = msg.Instances
+		for k, v := range msg.CachedMem {
+			m.cachedMem[k] = v
+		}
+		for k, v := range msg.CachedReqs {
+			m.cachedReqs[k] = v
+		}
+		if m.selected >= len(m.instances) {
+			m.selected = len(m.instances) - 1
+		}
+		if m.selected < 0 {
+			m.selected = 0
+		}
+		return nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
@@ -49,11 +112,11 @@ func (m *MonitorModel) Update(msg tea.Msg) tea.Cmd {
 			if m.selected < len(m.instances)-1 {
 				m.selected++
 			}
-		case "s", "K":
+		case "s", "S":
 			if len(m.instances) > 0 && m.selected >= 0 && m.selected < len(m.instances) {
 				port := m.instances[m.selected].Port
 				_ = m.srvRunner.StopInstance(port)
-				m.Refresh()
+				return m.PollMetricsCmd()
 			}
 		}
 	}
@@ -61,10 +124,6 @@ func (m *MonitorModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (m *MonitorModel) View(width int, height int) string {
-	m.width = width
-	m.height = height
-	m.Refresh()
-
 	var sb strings.Builder
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("RUNTIME SERVER MONITOR")))
@@ -75,13 +134,15 @@ func (m *MonitorModel) View(width int, height int) string {
 	} else {
 		sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Active Server Instances:") + "\n")
 		sb.WriteString(fmt.Sprintf("  %-6s %-20s %-10s %-10s %-6s\n", "Port", "Model", "PID", "Uptime", "Status"))
-		sb.WriteString("  " + strings.Repeat("─", width-8) + "\n")
+		divWidth := width - 8
+		if divWidth < 10 {
+			divWidth = 10
+		}
+		sb.WriteString("  " + strings.Repeat("─", divWidth) + "\n")
 
 		for idx, inst := range m.instances {
 			modelName := filepath.Base(inst.ModelPath)
-			if len(modelName) > 20 {
-				modelName = modelName[:17] + "..."
-			}
+			modelName = TruncateVisual(modelName, 20, "...")
 
 			uptimeSec := int(inst.Uptime.Seconds())
 			uptimeStr := fmt.Sprintf("%dh %dm %ds", uptimeSec/3600, (uptimeSec%3600)/60, uptimeSec%60)
@@ -93,7 +154,11 @@ func (m *MonitorModel) View(width int, height int) string {
 			)
 
 			if idx == m.selected {
-				sb.WriteString(StyleSelectedListItem.Width(width - 4).Render(row) + "\n")
+				rowWidth := width - 8
+				if rowWidth < 10 {
+					rowWidth = 10
+				}
+				sb.WriteString(StyleSelectedListItem.Width(rowWidth).Render(row) + "\n")
 			} else {
 				sb.WriteString(row + "\n")
 			}
@@ -101,24 +166,25 @@ func (m *MonitorModel) View(width int, height int) string {
 
 		sb.WriteString("\n")
 
-		selectedInst := m.instances[m.selected]
-		sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Selected Instance Performance Metrics:") + "\n")
-		sb.WriteString("  " + strings.Repeat("─", width-8) + "\n")
-
-		memStr := "Gathering..."
-		mem, err := runner.GetMemoryUsage(selectedInst.PID)
-		if err == nil {
-			memStr = fmt.Sprintf("%.2f MB", mem)
-		} else {
-			memStr = "N/A"
+		selectedIdx := m.selected
+		if selectedIdx >= len(m.instances) {
+			selectedIdx = len(m.instances) - 1
 		}
+		if selectedIdx < 0 {
+			selectedIdx = 0
+		}
+		selectedInst := m.instances[selectedIdx]
 
-		reqStr := "Gathering..."
-		reqs, err := runner.QueryServerRequests(selectedInst.Port)
-		if err == nil {
-			reqStr = fmt.Sprintf("%d requests", reqs)
-		} else {
-			reqStr = "0 requests"
+		sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Render("Selected Instance Performance Metrics:") + "\n")
+		sb.WriteString("  " + strings.Repeat("─", divWidth) + "\n")
+
+		memStr, hasMem := m.cachedMem[selectedInst.PID]
+		if !hasMem {
+			memStr = "Gathering..."
+		}
+		reqStr, hasReq := m.cachedReqs[selectedInst.Port]
+		if !hasReq {
+			reqStr = "Gathering..."
 		}
 
 		sb.WriteString(fmt.Sprintf("  %-20s %d\n", "Process PID:", selectedInst.PID))
@@ -129,7 +195,7 @@ func (m *MonitorModel) View(width int, height int) string {
 		sb.WriteString(fmt.Sprintf("  %-20s %s\n\n", "Log File Path:", selectedInst.LogFile))
 
 		helpStr := fmt.Sprintf("%s Stop Selected Server  %s Back to Browser",
-			StyleHelpKey.Render("[S/K]"),
+			StyleHelpKey.Render("[S]"),
 			StyleHelpKey.Render("[Esc]"),
 		)
 		sb.WriteString("  " + helpStr + "\n")
