@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 // AppDataDir returns the fixed directory where runora stores all its data.
@@ -20,14 +21,28 @@ func AppDataDir() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("could not determine config directory: %w", err)
 		}
-	case "linux":
-		// TODO: implement XDG_DATA_HOME (~/.local/share/runora) for Linux
-		return "", fmt.Errorf("linux app data directory not yet implemented")
 	case "darwin":
-		// TODO: implement ~/Library/Application Support/runora for macOS
-		return "", fmt.Errorf("macOS app data directory not yet implemented")
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", fmt.Errorf("could not determine user home directory: %w", homeErr)
+		}
+		base = filepath.Join(home, "Library", "Application Support")
+	case "linux":
+		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+			base = xdg
+		} else {
+			home, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				return "", fmt.Errorf("could not determine user home directory: %w", homeErr)
+			}
+			base = filepath.Join(home, ".config")
+		}
 	default:
-		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", fmt.Errorf("could not determine user home directory: %w", homeErr)
+		}
+		base = filepath.Join(home, ".config")
 	}
 
 	oldPath := filepath.Join(base, "llmgr")
@@ -72,6 +87,53 @@ type Config struct {
 
 const configFileName = "config.json"
 
+// AtomicWriteFile writes data to a temporary file in the same directory as filename,
+// calls Sync() to flush to disk, closes the file, and performs an atomic rename.
+func AtomicWriteFile(filename string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("could not create directory %s: %w", dir, err)
+	}
+
+	tmpFile, err := os.CreateTemp(dir, ".tmp-"+filepath.Base(filename)+"-*")
+	if err != nil {
+		return fmt.Errorf("could not create temp file in %s: %w", dir, err)
+	}
+	tmpName := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("could not write to temp file %s: %w", tmpName, err)
+	}
+
+	_ = tmpFile.Chmod(perm)
+
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("could not sync temp file %s: %w", tmpName, err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("could not close temp file %s: %w", tmpName, err)
+	}
+
+	if err := os.Rename(tmpName, filename); err != nil {
+		if runtime.GOOS == "windows" {
+			_ = os.Remove(filename)
+			if rerr := os.Rename(tmpName, filename); rerr != nil {
+				return fmt.Errorf("could not atomic rename %s to %s: %w", tmpName, filename, rerr)
+			}
+			return nil
+		}
+		return fmt.Errorf("could not atomic rename %s to %s: %w", tmpName, filename, err)
+	}
+
+	return nil
+}
+
 // Load reads the configuration from the platform app data directory,
 // creating it with defaults if it does not exist.
 func Load() (*Config, error) {
@@ -79,7 +141,11 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	return LoadFromDir(dir)
+}
 
+// LoadFromDir reads configuration rooted at dir, recovering from corrupted configs automatically.
+func LoadFromDir(dir string) (*Config, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("could not create app data directory: %w", err)
 	}
@@ -87,6 +153,7 @@ func Load() (*Config, error) {
 	configPath := filepath.Join(dir, configFileName)
 
 	var cfg *Config
+	defaults := defaultConfig(dir)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		cfg = defaultConfig(dir)
 		if err := cfg.Save(); err != nil {
@@ -97,14 +164,45 @@ func Load() (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		cfg = &Config{}
+		cfg = defaultConfig(dir)
 		if err := json.Unmarshal(data, cfg); err != nil {
+			// Corrupted config detected: backup corrupted config before generating defaults
+			timestamp := time.Now().Format("20060102150405")
+			corruptedPath := filepath.Join(dir, fmt.Sprintf("config.corrupted.%s.json", timestamp))
+			_ = os.WriteFile(corruptedPath, data, 0600)
+
 			cfg = defaultConfig(dir)
 			_ = cfg.Save()
 		}
 	}
 
 	cfg.configPath = configPath
+
+	// Backfill any missing or empty paths/settings from defaults
+	if cfg.Paths.Models == "" {
+		cfg.Paths.Models = defaults.Paths.Models
+	}
+	if cfg.Paths.LlamaCPP == "" {
+		cfg.Paths.LlamaCPP = defaults.Paths.LlamaCPP
+	}
+	if cfg.Paths.OnnxRuntime == "" {
+		cfg.Paths.OnnxRuntime = defaults.Paths.OnnxRuntime
+	}
+	if cfg.Paths.Profiles == "" {
+		cfg.Paths.Profiles = defaults.Paths.Profiles
+	}
+	if cfg.Paths.Cache == "" {
+		cfg.Paths.Cache = defaults.Paths.Cache
+	}
+	if cfg.Paths.Benchmarks == "" {
+		cfg.Paths.Benchmarks = defaults.Paths.Benchmarks
+	}
+	if cfg.Paths.Downloads == "" {
+		cfg.Paths.Downloads = defaults.Paths.Downloads
+	}
+	if cfg.Theme == "" {
+		cfg.Theme = "forest"
+	}
 
 	if cfg.ModelProfiles == nil {
 		cfg.ModelProfiles = make(map[string]string)
@@ -161,7 +259,7 @@ func defaultConfig(dir string) *Config {
 	}
 }
 
-// Save writes the current configuration to disk.
+// Save writes the current configuration to disk atomically.
 func (c *Config) Save() error {
 	if c.configPath == "" {
 		dir, err := AppDataDir()
@@ -175,7 +273,7 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.configPath, data, 0600)
+	return AtomicWriteFile(c.configPath, data, 0600)
 }
 
 func (c *Config) CreateDirectories() error {

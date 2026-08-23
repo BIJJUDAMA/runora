@@ -198,3 +198,99 @@ func TestAppDataDirMigration(t *testing.T) {
 		t.Errorf("expected migrated config.json to exist at %q, but got err: %v", newConfig, err)
 	}
 }
+
+func TestAtomicWriteFile(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "runora-atomic-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	targetFile := filepath.Join(tempDir, "test.txt")
+	testData := []byte("hello atomic world")
+
+	if err := AtomicWriteFile(targetFile, testData, 0600); err != nil {
+		t.Fatalf("AtomicWriteFile failed: %v", err)
+	}
+
+	readData, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("failed to read back atomic file: %v", err)
+	}
+	if string(readData) != string(testData) {
+		t.Errorf("expected %q, got %q", string(testData), string(readData))
+	}
+
+	// Overwrite atomically
+	newData := []byte("overwritten atomic world")
+	if err := AtomicWriteFile(targetFile, newData, 0600); err != nil {
+		t.Fatalf("AtomicWriteFile overwrite failed: %v", err)
+	}
+
+	readNewData, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("failed to read back overwritten atomic file: %v", err)
+	}
+	if string(readNewData) != string(newData) {
+		t.Errorf("expected %q, got %q", string(newData), string(readNewData))
+	}
+}
+
+func TestCorruptedConfigRecovery(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "runora-corrupt-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	configPath := filepath.Join(tempDir, configFileName)
+	corruptedData := []byte(`{ invalid json content !!! `)
+	if err := os.WriteFile(configPath, corruptedData, 0644); err != nil {
+		t.Fatalf("failed to write corrupted config: %v", err)
+	}
+
+	cfg, err := LoadFromDir(tempDir)
+	if err != nil {
+		t.Fatalf("LoadFromDir should recover gracefully from corrupted config, got err: %v", err)
+	}
+
+	if cfg == nil {
+		t.Fatalf("expected non-nil default config after recovery")
+	}
+
+	// Verify that a backup corrupted file was created
+	files, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatalf("failed to read tempDir: %v", err)
+	}
+
+	foundBackup := false
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), "config.corrupted.") && strings.HasSuffix(f.Name(), ".json") {
+			foundBackup = true
+			backupPath := filepath.Join(tempDir, f.Name())
+			data, err := os.ReadFile(backupPath)
+			if err != nil {
+				t.Errorf("failed to read backup file: %v", err)
+			}
+			if string(data) != string(corruptedData) {
+				t.Errorf("backup file content mismatch: expected %q, got %q", string(corruptedData), string(data))
+			}
+			break
+		}
+	}
+
+	if !foundBackup {
+		t.Errorf("expected corrupted config backup file to exist in directory, found: %v", files)
+	}
+
+	// Verify new config is valid JSON
+	var parsed Config
+	validData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read new config.json: %v", err)
+	}
+	if err := json.Unmarshal(validData, &parsed); err != nil {
+		t.Errorf("new config.json should be valid JSON: %v", err)
+	}
+}
