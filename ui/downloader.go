@@ -177,19 +177,9 @@ func (m *DownloaderModel) Update(msg tea.Msg) (*DownloaderModel, tea.Cmd) {
 							repoID = parts[0] + "/" + parts[1]
 						}
 
-						// Verify if HF token is set
 						hfToken := m.config.HFToken
 						if hfToken == "" {
 							hfToken = os.Getenv("HF_TOKEN")
-						}
-						if hfToken == "" {
-							m.queue.AddFailedTask(repoID, "Hugging Face Repo", fmt.Errorf("Hugging Face token is not set (please configure in Settings or onboarding)"))
-							m.urlInput.SetValue("")
-							m.filenameInput.SetValue("")
-							m.focus = FocusURL
-							m.urlInput.Focus()
-							m.selectedTaskIdx = len(m.queue.GetTasks()) - 1
-							return m, nil
 						}
 
 						if filename != "" {
@@ -472,7 +462,7 @@ func (m *DownloaderModel) View(width int, height int) string {
 				if t.TotalSize > 0 {
 					progressFraction = float64(t.Downloaded) / float64(t.TotalSize)
 				}
-				progressBar := renderProgressBar(20, progressFraction)
+				progressBar := RenderProgressBar(progressFraction*100.0, 14, ColorProgressFilled) + fmt.Sprintf(" %3.0f%%", progressFraction*100.0)
 
 				row := fmt.Sprintf("%-20s %s %s (%s / %s)",
 					t.FileName, progressBar, statusStr, formatSize(t.Downloaded), formatSize(t.TotalSize),

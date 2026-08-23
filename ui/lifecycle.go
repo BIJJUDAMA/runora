@@ -220,9 +220,10 @@ func (m *LifecycleModel) StartCheckOnly() tea.Cmd {
 
 		localV, _, _, _ := runner.QueryLocalVersion(m.config.Paths.LlamaCPP)
 		state := StateUpdateAvailable
-		cleanLocal := strings.TrimPrefix(strings.ToLower(localV), "b")
-		cleanLatest := strings.TrimPrefix(strings.ToLower(release.TagName), "b")
-		if cleanLocal == cleanLatest && cleanLocal != "unknown" && cleanLocal != "not installed" {
+		cleanLocal := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(localV), "v"), "b")
+		cleanLatest := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(release.TagName), "v"), "b")
+		cleanNightly := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(release.NightlyTag), "v"), "b")
+		if (cleanLocal == cleanLatest || (cleanNightly != "" && cleanLocal == cleanNightly)) && cleanLocal != "unknown" && cleanLocal != "not installed" {
 			state = StateNoUpdate
 		}
 
@@ -883,7 +884,8 @@ func (m *LifecycleModel) View(width int, height int) string {
 			sb.WriteString("    " + statusText + "\n")
 		}
 		if m.state == StateDownloading {
-			sb.WriteString("    " + renderProgressBar(width-8, m.downloadProgress) + "\n")
+			bar := RenderProgressBar(m.downloadProgress*100.0, width-18, ColorProgressFilled)
+			sb.WriteString(fmt.Sprintf("    %s %3.0f%%\n", bar, m.downloadProgress*100.0))
 		}
 		sb.WriteString("\n")
 	}
@@ -894,7 +896,8 @@ func (m *LifecycleModel) View(width int, height int) string {
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Switch Focus", StyleHelpKey.Render("[1-3 / Tab/↑↓]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Check", StyleHelpKey.Render("[C/Enter]")))
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Update/Install", StyleHelpKey.Render("[U/Space]")))
-		if m.hasBackup {
+		canRollback := (m.SelectedRuntime == 0 && m.hasLlamaBackup) || (m.SelectedRuntime == 1 && m.hasOnnxBackup)
+		if canRollback {
 			helpKeys = append(helpKeys, fmt.Sprintf("%s Rollback", StyleHelpKey.Render("[R]")))
 		}
 		helpKeys = append(helpKeys, fmt.Sprintf("%s Theme", StyleHelpKey.Render("[Y]")))
@@ -915,22 +918,4 @@ func (m *LifecycleModel) View(width int, height int) string {
 		BorderForeground(ColorPrimary).
 		Width(boxWidth).
 		Render(sb.String())
-}
-
-func renderProgressBar(width int, fraction float64) string {
-	barWidth := width - 10
-	if barWidth < 10 {
-		barWidth = 10
-	}
-	filledWidth := int(float64(barWidth) * fraction)
-	if filledWidth > barWidth {
-		filledWidth = barWidth
-	}
-	emptyWidth := barWidth - filledWidth
-
-	filled := lipgloss.NewStyle().Foreground(ColorSecondary).Render(strings.Repeat("█", filledWidth))
-	empty := lipgloss.NewStyle().Foreground(ColorMuted).Render(strings.Repeat("░", emptyWidth))
-	percent := fmt.Sprintf(" %3.0f%%", fraction*100.0)
-
-	return filled + empty + percent
 }
