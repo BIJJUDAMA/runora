@@ -416,7 +416,7 @@ func (m *DownloaderModel) View(width int, height int) string {
 	}
 
 	inputSb.WriteString("  " + urlStyle.Render(urlLabel) + "\n")
-	inputSb.WriteString("  " + m.urlInput.View() + "\n\n")
+	inputSb.WriteString("  " + m.urlInput.View() + "\n")
 	inputSb.WriteString("  " + fileStyle.Render(fileLabel) + "\n")
 	inputSb.WriteString("  " + m.filenameInput.View() + "\n\n")
 
@@ -580,17 +580,16 @@ func (m *DownloaderModel) View(width int, height int) string {
 	topContent := strings.TrimRight(inputSb.String(), "\n")
 	botContent := strings.TrimRight(queueSb.String(), "\n")
 
-	// Calculate balanced card height to fill the available height
-	topHeight := 0
+	// Render top card with natural height
+	topCard := SurfaceCard("Direct Model Download", topContent, width, m.focus == FocusURL || m.focus == FocusFilename, "HuggingFace / Direct")
+	topCardHeight := lipgloss.Height(topCard)
+
+	// Bottom card takes exact remaining height so bodyView fits bodyHeight perfectly
 	botHeight := 0
-	if height > 0 {
-		if height > 14 {
-			topHeight = 7
-			botHeight = height - topHeight
-		}
+	if height > topCardHeight {
+		botHeight = height - topCardHeight
 	}
 
-	topCard := SurfaceCardWithHeight("Direct Model Download", topContent, width, topHeight, m.focus == FocusURL || m.focus == FocusFilename, "HuggingFace / Direct")
 	bottomCard := SurfaceCardWithHeight("Download Queue & Progress", botContent, width, botHeight, m.focus == FocusQueue || m.focus == FocusFileList, fmt.Sprintf("%d active", len(m.queue.GetTasks())))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
