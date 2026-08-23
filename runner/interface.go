@@ -1,4 +1,4 @@
-package runner
+﻿package runner
 
 import (
 	"fmt"
@@ -46,6 +46,7 @@ type StartOptions struct {
 	BatchSize   int
 	Host        string
 	Port        int
+	Task        TaskType
 }
 
 type ModelRuntime interface {
@@ -64,14 +65,17 @@ type ModelRuntime interface {
 }
 
 type MultiRuntimeManager struct {
-	llamaCpp ModelRuntime
-	onnx     ModelRuntime
+	supervisor *ProcessSupervisor
+	llamaCpp   *LlamaCppRuntime
+	onnx       *OnnxRuntime
 }
 
 func NewMultiRuntimeManager(logDir string) *MultiRuntimeManager {
+	supervisor := NewProcessSupervisor(logDir)
 	return &MultiRuntimeManager{
-		llamaCpp: NewLlamaCppRuntime(logDir),
-		onnx:     NewOnnxRuntime(logDir),
+		supervisor: supervisor,
+		llamaCpp:   NewLlamaCppRuntimeWithSupervisor(supervisor),
+		onnx:       NewOnnxRuntimeWithSupervisor(supervisor),
 	}
 }
 
@@ -87,30 +91,19 @@ func (m *MultiRuntimeManager) Start(modelPath string, opts StartOptions) error {
 }
 
 func (m *MultiRuntimeManager) Stop() error {
-	_ = m.llamaCpp.Stop()
-	_ = m.onnx.Stop()
-	return nil
+	return m.supervisor.Stop()
 }
 
 func (m *MultiRuntimeManager) StopInstance(port int) error {
-	_ = m.llamaCpp.StopInstance(port)
-	_ = m.onnx.StopInstance(port)
-	return nil
+	return m.supervisor.StopInstance(port)
 }
 
 func (m *MultiRuntimeManager) GetStatus() (ServerStatus, string, int) {
-	status, model, port := m.llamaCpp.GetStatus()
-	if status == StatusRunning {
-		return status, model, port
-	}
-	return m.onnx.GetStatus()
+	return m.supervisor.GetStatus()
 }
 
 func (m *MultiRuntimeManager) GetAllInstances() []InstanceInfo {
-	var list []InstanceInfo
-	list = append(list, m.llamaCpp.GetAllInstances()...)
-	list = append(list, m.onnx.GetAllInstances()...)
-	return list
+	return m.supervisor.GetAllInstances()
 }
 
 func (m *MultiRuntimeManager) Capabilities() []TaskType {
@@ -118,4 +111,8 @@ func (m *MultiRuntimeManager) Capabilities() []TaskType {
 	list = append(list, m.llamaCpp.Capabilities()...)
 	list = append(list, m.onnx.Capabilities()...)
 	return list
+}
+
+func (m *MultiRuntimeManager) Supervisor() *ProcessSupervisor {
+	return m.supervisor
 }
