@@ -94,80 +94,28 @@ func (d *DashboardModel) View(width int, height int) string {
 		return "No profiles found."
 	}
 
+	boxWidth := width - 4
+	if boxWidth < 70 {
+		boxWidth = 70
+	}
+
+	gridWidth := boxWidth - 4
+	if gridWidth < 60 {
+		gridWidth = 60
+	}
+
+	leftColWidth := gridWidth / 2
+	rightColWidth := gridWidth - leftColWidth
+
 	var sb strings.Builder
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("LAUNCH DASHBOARD")))
-	modelName := TruncateVisual(d.Model.Name, max(30, width-14), "...")
+	modelName := "No Model Selected"
+	if d.Model != nil {
+		modelName = d.Model.Name
+	}
+	modelName = TruncateVisual(modelName, max(30, width-14), "...")
 	sb.WriteString(fmt.Sprintf("  Model: %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(modelName)))
-
-	// Profiles selector row
-	var profsRow []string
-	for i, prof := range d.Profiles {
-		isDefault := profile.IsDefaultProfile(prof.Name)
-		profLabel := prof.Name
-		if !isDefault {
-			profLabel = prof.Name + "*"
-		}
-		if i == d.ActiveIdx {
-			profsRow = append(profsRow, lipgloss.NewStyle().
-				Background(ColorPrimary).
-				Foreground(ColorTextOnAccent).
-				Bold(true).
-				Padding(0, 1).
-				Render(profLabel))
-		} else {
-			profsRow = append(profsRow, lipgloss.NewStyle().
-				Foreground(ColorMuted).
-				Padding(0, 1).
-				Render(profLabel))
-		}
-	}
-	sb.WriteString("  Profile:  " + strings.Join(profsRow, "  ") + "\n\n")
-
-	// Details
-	sb.WriteString(fmt.Sprintf("  %-16s %d tokens\n", "Context Size:", p.Context))
-	sb.WriteString(fmt.Sprintf("  %-16s %d threads\n", "CPU Threads:", p.Threads))
-	sb.WriteString(fmt.Sprintf("  %-16s %d\n", "GPU Layers:", p.GPULayers))
-	sb.WriteString(fmt.Sprintf("  %-16s %d\n", "Batch Size:", p.BatchSize))
-	sb.WriteString(fmt.Sprintf("  %-16s %s:%d\n\n", "Host/Port:", p.Host, p.Port))
-
-	// Dynamic Memory Estimates based on the active profile's context
-	if d.Specs != nil {
-		est := hardware.EstimateMemory(d.Model, d.Specs, p.Context)
-		var suitStr string
-		switch est.Suitability {
-		case hardware.SuitabilityFitsVRAM:
-			suitStr = StyleSuccess.Render("Fits GPU VRAM")
-		case hardware.SuitabilityPartialVRAM:
-			suitStr = StyleWarning.Render("Partial VRAM Offload")
-		case hardware.SuitabilityFitsRAM:
-			suitStr = lipgloss.NewStyle().Foreground(ColorSecondary).Render("Fits System RAM (CPU)")
-		case hardware.SuitabilityExceeds:
-			suitStr = StyleDanger.Render("Exceeds Memory Limits")
-		}
-
-		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("Dynamic Memory Suitability:")))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "Status:", suitStr))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n", "KV Cache Size:", formatSize(int64(est.KVCacheSize))))
-		sb.WriteString(fmt.Sprintf("  %-16s %s (GPU offload: %d%%)\n", "Total Memory:", formatSize(int64(est.TotalMemory)), est.GPUOffloadPct))
-		sb.WriteString(fmt.Sprintf("  %-16s %s\n\n", "Recommendation:", est.Reason))
-	}
-
-	// Command preview
-	cmdPreview := d.GetLaunchCommand()
-	
-	cmdWidth := width - 6
-	if cmdWidth < 20 {
-		cmdWidth = 20
-	}
-
-	wrappedCmd := lipgloss.NewStyle().
-		Foreground(ColorSecondary).
-		Italic(true).
-		Width(cmdWidth).
-		Render(cmdPreview)
-
-	sb.WriteString(fmt.Sprintf("  %s\n  %s\n\n", lipgloss.NewStyle().Bold(true).Render("Launch Command Preview:"), wrappedCmd))
 
 	// Toast notification banner if present and not expired
 	if d.ToastMessage != "" && (d.ToastExpiry.IsZero() || time.Now().Before(d.ToastExpiry)) {
@@ -179,8 +127,161 @@ func (d *DashboardModel) View(width int, height int) string {
 		sb.WriteString(fmt.Sprintf("  %s\n\n", toastStyle.Render(d.ToastMessage)))
 	}
 
+	// ── Left Column: Hardware Fit & Memory Estimate ──
+	var leftContent strings.Builder
+	suitabilityBadge := "[SYSTEM RAM]"
+
+	if d.Model != nil {
+		weightStr := formatSize(d.Model.FileSize)
+		if d.Specs != nil {
+			est := hardware.EstimateMemory(d.Model, d.Specs, p.Context)
+
+			switch est.Suitability {
+			case hardware.SuitabilityFitsVRAM:
+				suitabilityBadge = "[FITS VRAM]"
+			case hardware.SuitabilityPartialVRAM:
+				suitabilityBadge = "[PARTIAL VRAM]"
+			case hardware.SuitabilityFitsRAM:
+				suitabilityBadge = "[FITS RAM]"
+			case hardware.SuitabilityExceeds:
+				suitabilityBadge = "[EXCEEDS]"
+			}
+
+			var suitStr string
+			switch est.Suitability {
+			case hardware.SuitabilityFitsVRAM:
+				suitStr = StyleSuccess.Render("Fits GPU VRAM (Full Offload)")
+			case hardware.SuitabilityPartialVRAM:
+				suitStr = StyleWarning.Render(fmt.Sprintf("Partial VRAM Offload (%d%%)", est.GPUOffloadPct))
+			case hardware.SuitabilityFitsRAM:
+				suitStr = lipgloss.NewStyle().Foreground(ColorSecondary).Render("Fits System RAM (CPU-only)")
+			case hardware.SuitabilityExceeds:
+				suitStr = StyleDanger.Render("Exceeds Memory Limits")
+			}
+
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Model Weight:", StyleTitle.Copy().Padding(0).Render(weightStr)))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s (%.2fx multiplier)\n", "Quantized KV Cache:", formatSize(int64(est.KVCacheSize)), est.KVCacheMultiplier))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Activation Graph:", formatSize(int64(est.ActivationSize))))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s (GPU offload: %d%%)\n", "Total Required:", formatSize(int64(est.TotalMemory)), est.GPUOffloadPct))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Fit Suitability:", suitStr))
+			if est.Reason != "" {
+				leftContent.WriteString(fmt.Sprintf("  %-20s %s\n\n", "Recommendation:", lipgloss.NewStyle().Foreground(ColorTextDim).Render(est.Reason)))
+			} else {
+				leftContent.WriteString("\n")
+			}
+
+			// Gradient Memory Bar
+			barWidth := leftColWidth - 8
+			if barWidth < 10 {
+				barWidth = 10
+			}
+			if barWidth > 28 {
+				barWidth = 28
+			}
+			startHex := ThemeGradientStart
+			if startHex == "" {
+				startHex = "#7D56F4"
+			}
+			endHex := ThemeGradientEnd
+			if endHex == "" {
+				endHex = "#FF5F87"
+			}
+			gradBar := RenderGradientBar(float64(est.GPUOffloadPct), barWidth, startHex, endHex)
+			leftContent.WriteString(fmt.Sprintf("  Memory Allocation:\n  [%s] %d%% GPU Offload\n", gradBar, est.GPUOffloadPct))
+		} else {
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Model Weight:", weightStr))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Quantized KV Cache:", "1.00x multiplier"))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Activation Graph:", "512 MB (Estimated)"))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n", "Total Required:", weightStr))
+			leftContent.WriteString(fmt.Sprintf("  %-20s %s\n\n", "Fit Suitability:", "Hardware specs unavailable"))
+
+			barWidth := leftColWidth - 8
+			if barWidth < 10 {
+				barWidth = 10
+			}
+			if barWidth > 28 {
+				barWidth = 28
+			}
+			gradBar := RenderGradientBar(0, barWidth, ThemeGradientStart, ThemeGradientEnd)
+			leftContent.WriteString(fmt.Sprintf("  Memory Allocation:\n  [%s] 0%% GPU Offload\n", gradBar))
+		}
+	} else {
+		leftContent.WriteString("  No model selected.\n")
+	}
+
+	leftCard := SurfaceCard("Hardware Fit & Memory Estimate", leftContent.String(), leftColWidth, true, suitabilityBadge)
+
+	// ── Right Column: Top Card - Execution Profile ──
+	var profileContent strings.Builder
+
+	// Profile Carousel line with [<] / [>]
+	var profItems []string
+	for i, prof := range d.Profiles {
+		isDefault := profile.IsDefaultProfile(prof.Name)
+		profLabel := prof.Name
+		if !isDefault {
+			profLabel = prof.Name + "*"
+		}
+		if i == d.ActiveIdx {
+			profItems = append(profItems, lipgloss.NewStyle().
+				Background(ColorPrimary).
+				Foreground(ColorTextOnAccent).
+				Bold(true).
+				Padding(0, 1).
+				Render(profLabel))
+		} else {
+			profItems = append(profItems, lipgloss.NewStyle().
+				Foreground(ColorMuted).
+				Padding(0, 1).
+				Render(profLabel))
+		}
+	}
+	carouselLine := fmt.Sprintf("  Profiles: %s %s %s\n\n",
+		StyleHelpKey.Render("[<]"),
+		strings.Join(profItems, " "),
+		StyleHelpKey.Render("[>]"),
+	)
+	profileContent.WriteString(carouselLine)
+
+	profileContent.WriteString(fmt.Sprintf("  %-18s %d tokens\n", "Context Size:", p.Context))
+	profileContent.WriteString(fmt.Sprintf("  %-18s %d threads\n", "Thread Count:", p.Threads))
+	profileContent.WriteString(fmt.Sprintf("  %-18s %d layers\n", "GPU Layers:", p.GPULayers))
+	profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "Flash Attention:", "Enabled (Auto)"))
+	profileContent.WriteString(fmt.Sprintf("  %-18s %s\n", "KV Quantization:", "FP16 (Q8_0/Q4_0/FP8 supported)"))
+	profileContent.WriteString(fmt.Sprintf("  %-18s %s:%d\n", "Host / Port:", p.Host, p.Port))
+
+	activeProfileBadge := p.Name
+	if !profile.IsDefaultProfile(p.Name) {
+		activeProfileBadge = p.Name + "*"
+	}
+	topRightCard := SurfaceCard("Execution Profile", profileContent.String(), rightColWidth, false, activeProfileBadge)
+
+	// ── Right Column: Bottom Card - Launch Command Preview ──
+	var previewContent strings.Builder
+	cmdPreview := d.GetLaunchCommand()
+	cmdWidth := rightColWidth - 6
+	if cmdWidth < 20 {
+		cmdWidth = 20
+	}
+	wrappedCmd := lipgloss.NewStyle().
+		Foreground(ColorSecondary).
+		Italic(true).
+		Width(cmdWidth).
+		Render(cmdPreview)
+
+	previewContent.WriteString(wrappedCmd)
+	previewContent.WriteString("\n\n")
+	previewContent.WriteString(fmt.Sprintf("  %s Copy to clipboard", StyleHelpKey.Render("[C]")))
+
+	botRightCard := SurfaceCard("Launch Command Preview", previewContent.String(), rightColWidth, false, "CLI")
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, topRightCard, botRightCard)
+
+	bentoGrid := lipgloss.JoinHorizontal(lipgloss.Top, leftCard, rightCol)
+	sb.WriteString(bentoGrid)
+	sb.WriteString("\n\n")
+
 	// Help prompts
-	helpStr := fmt.Sprintf("%s Launch  %s Cycle  %s New  %s Edit  %s Dupl  %s Del  %s Copy Cmd  %s Back",
+	helpStr := fmt.Sprintf("  %s Launch  %s Cycle  %s New  %s Edit  %s Dupl  %s Del  %s Copy Cmd  %s Back",
 		StyleHelpKey.Render("[Enter]"),
 		StyleHelpKey.Render("[←/→]"),
 		StyleHelpKey.Render("[P]"),
@@ -190,12 +291,8 @@ func (d *DashboardModel) View(width int, height int) string {
 		StyleHelpKey.Render("[C]"),
 		StyleHelpKey.Render("[Esc]"),
 	)
-	sb.WriteString("  " + helpStr + "\n")
+	sb.WriteString(helpStr + "\n")
 
-	boxWidth := width - 4
-	if boxWidth < 50 {
-		boxWidth = 50
-	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
 		BorderForeground(ColorPrimary).
