@@ -1,146 +1,201 @@
 # Runora
 
-A terminal-based manager and launcher for local large language models. It handles model discovery, hardware suitability estimation, custom launch profiles, concurrent server execution, model downloads (from URLs or Hugging Face repositories), and runtime lifecycle management.
+A terminal-based manager, launcher, and monitoring dashboard for local large language models. Runora handles recursive GGUF/ONNX model discovery, multi-part shard aggregation, exact hardware suitability estimation, 5x5 execution profile grids, Flash Attention acceleration, quantized KV cache configuration, multi-instance server supervision, automated runtime version slot management, and high-speed model downloads.
 
 ---
 
 ## Key Features
 
-- **Multi-Runtime Architecture**: Abstracted runner layer with deterministic routing of models:
-  - **llama.cpp**: Out-of-the-box support for `.gguf` text generation and embedding models.
-  - **ONNX Runtime**: Native execution wrapper for `.onnx` models.
-- **Dynamic Hardware & CUDA Detection**: Dynamic host environment interrogation (operating system, CPU threads/model, RAM, and GPU accelerator).
-  - Automatically identifies **CUDA**, **Metal**, **ROCm**, **Vulkan**, or **CPU-only** backends.
-  - Dynamically extracts system CUDA toolkit versions (major versions 11, 12, 13) using environment variables, command queries (`nvcc`), or `nvidia-smi` parser blocks to download the optimal prebuilt binary.
-- **Automated Pre-Built Runtime Installers**:
-  - **llama.cpp Updater**: Downloads, validates, and extracts pre-built binary packages and Windows CUDA runtime DLLs matching the system's exact CUDA version.
-  - **ONNX Runtime Downloader**: Automatically checks the official `microsoft/onnxruntime` repository, matches the host architecture/CUDA backend, extracts only the required shared libraries (`onnxruntime.dll`, `libonnxruntime.so`, or `libonnxruntime.dylib`), and validates the installation.
-- **Concurrent Model Execution**: Launch multiple model instances concurrently on separate ports:
-  - Dynamic **port auto-fallback**: If a model is launched on a port currently occupied by another active server, Runora automatically increments the port (e.g. `50506`, `50507`) to run both side-by-side.
-  - Safe port releasing delays (250ms cooldown) to avoid socket race conditions when restarting/re-deploying a model.
-- **Interactive Model Download Manager**:
-  - Queue direct URLs or resolve entire **Hugging Face repositories** dynamically.
-  - Interactively browse and select specific GGUF/model files within Hugging Face repos to queue for download.
-  - Real-time download speeds, percentage indicators, and individual/completed task cleaning.
-- **Task Type Cycling**: Cycle model task capabilities directly from the TUI (`[E]` key) to transition between text generation, embeddings, reranking, speech, image generation, vision, and multimodal types.
-- **Beautiful TUI Aesthetics**: Custom built-in gradient themes (Dracula, Sunset, Nord, Cyberpunk, Forest, Monochrome) cycleable directly via keyboard hotkeys.
+- **Global Number-Row Navigation & Keymap**:
+  - Instantaneous top-level routing using number keys `1` through `6` across all views:
+    - `[1] Models`: Bento-card model explorer and metadata inspection deck.
+    - `[2] Dashboard`: Dual-column launch dashboard, 5x5 profile grid, and CLI preview.
+    - `[3] Monitor`: Multi-instance server supervisor, live `/slots` context gauges, and throughput metrics.
+    - `[4] Downloads`: Direct URL / Hugging Face download manager with queue resumption.
+    - `[5] Benchmark`: Decoupled prompt latency (TTFT) and generation throughput dashboard.
+    - `[6] Settings`: Multi-runtime version slots, release channels, and API token manager.
+  - Global cycling with `Tab` / `Shift+Tab` and `[` / `]`.
+  - Persistent hardware telemetry header displaying live active server counts and GPU VRAM utilization meters.
+
+- **Bento Card TUI Design & 10 Built-In Themes**:
+  - Modular Bento surface card architecture across all screens with responsive height clamping.
+  - 10 curated color themes including Dracula, Sunset, Nord, Cyberpunk, Forest, Monochrome, Solarized Light, Paper Light, and High Contrast (WCAG AAA).
+  - Interactive Theme Picker (`[Y]`) with live preview and description swatches.
+  - Non-intrusive floating toast notifications with ANSI compositing.
+  - Real-time live log streamer (`[L]`) with 250ms tailing, auto-scroll, regex search filtering (`[/]`), stream pause/resume (`[Space]`), syntax highlighting, and multi-instance tab switching.
+
+- **5x5 Profile Grid & Deep Customization**:
+  - 5-per-row Bento grid layout (supporting up to 25 profiles) with dynamic vertical expansion that pushes subsequent content downward without phantom line gaps.
+  - 2D grid keyboard navigation (`[←/→]` for horizontal movement, `[↑/↓]` for vertical row jumps).
+  - Flash Attention enabled by default across all llama.cpp invocations (`--flash-attn`).
+  - Quantized KV Cache support (`--cache-type-k` and `--cache-type-v` supporting `f16`, `q8_0`, `q4_0`, `fp8`).
+  - Direct raw CLI arguments field allowing custom flags passed directly to `llama-server`.
+  - Interactive 8-field Profile Creator and Editor (`[P]` / `[E]`).
+  - Unrestricted profile deletion (`[D]`) allowing removal of any custom or built-in default profile.
+
+- **Multi-Runtime Architecture & Version Slot Management**:
+  - Multi-runtime runner abstraction with deterministic routing:
+    - **llama.cpp**: Native runner for `.gguf` text generation and embedding models.
+    - **ONNX Runtime**: Native execution wrapper for `.onnx` models.
+  - Version slot isolation under `llama.cpp/versions/<tag>/` with active version switching, side-by-side installations, and clean removal.
+  - Release channel switching between `Stable` (vX.Y.Z releases) and `Nightly` (upstream commit tags).
+  - Explicit backend accelerator selection: CUDA 12, CUDA 13, Vulkan, CPU, ROCm, Metal.
+  - Automated asset matching and dependency extraction (including Windows CUDA runtime DLLs).
+
+- **Hardware Intelligence & Multi-GPU Tensor Splitting**:
+  - Native host environment detection covering CPU physical cores vs logical threads, RAM, and GPU accelerators.
+  - Multi-GPU enumeration, total VRAM aggregation, and `TensorSplitAdvisor` integer ratio calculation (e.g. 24GB + 16GB + 8GB -> `3,2,1`).
+  - Mathematical Quantized KV Cache memory estimation (`FP16`, `Q8_0`, `Q4_0`, `FP8`) and exact integer GPU layer offloading calculator.
+  - Apple Silicon Metal piecewise unified memory curve (67% to 92%).
+
+- **GGUF Sharding & Multi-Directory Model Discovery**:
+  - Automatic multi-part GGUF shard consolidation (`model-00001-of-00004.gguf`) into single entries with aggregate size and shard count indicators.
+  - Multi-directory recursive model discovery supporting primary and secondary storage paths (`Paths.ModelDirectories`).
+  - Safe GGUF metadata parsing protected against oversized strings, recursion loops, and corrupted headers.
+
+- **Download Queue with HTTP Range Resumption**:
+  - Direct URL and Hugging Face repository search and download queue.
+  - HTTP Range header resumption with `.part` file caching and graceful fallback.
+
+- **Headless CLI Scripting**:
+  - Headless execution flags for terminal pipelines and automated environments:
+    - `runora --list-models`: List discovered models (supports `--json`).
+    - `runora --status`: Print active server instances and telemetry (supports `--json`).
+    - `runora --data-dir <path>`: Override the default application data directory.
+    - `runora --models <path>`: Override the primary models search directory.
 
 ---
 
 ## Requirements
 
-- **Go 1.26** or later (for compiling/building from source).
-- **Supported Platforms**: Windows, Linux, and macOS (with Apple Silicon unified memory detection).
-- **GPU Toolkits**: NVIDIA CUDA Toolkit (if running CUDA acceleration; fallback to CPU is automatic if missing).
+- **Go 1.22** or later (for compiling from source).
+- **Supported Operating Systems**: Windows (10/11), Linux, and macOS (Apple Silicon and Intel).
+- **Accelerators**: NVIDIA CUDA Toolkit (11.x, 12.x, 13.x), Vulkan SDK, AMD ROCm, Apple Metal, or CPU fallback.
 
 ---
 
 ## Installation
 
-Ensure Go is installed and present in your system's `PATH`. Run the following command to download and compile the application:
+### Compile from Source via Go
+
+Ensure Go is installed and present in your system's `PATH`:
 
 ```bash
 go install github.com/BIJJUDAMA/runora/cmd/runora@latest
 ```
 
-The compiled binary will be placed in your Go bin directory (typically `$HOME/go/bin` on Unix or `%USERPROFILE%\go\bin` on Windows).
+The compiled binary will be placed in your Go bin directory (typically `$HOME/go/bin` on Linux/macOS or `%USERPROFILE%\go\bin` on Windows).
 
-To temporarily add it to your path:
+### Pre-Built GitHub Releases
 
-### Windows (PowerShell)
-
-```powershell
-$env:PATH += ";$env:USERPROFILE\go\bin"
-```
-
-### Linux / macOS
-
-```bash
-export PATH="$HOME/go/bin:$PATH"
-```
+Download the latest pre-compiled archive for your platform from the [GitHub Releases](https://github.com/BIJJUDAMA/runora/releases) page.
 
 ---
 
 ## Usage
 
-Start the application by running:
+Start the interactive terminal user interface:
 
 ```bash
 runora
 ```
 
-### Command Flags
+### CLI Command Options
 
-- `--version`: Print the installed version of Runora and exit.
-- `--reset-onboarding`: Re-run the interactive onboarding tour on the next startup.
+```text
+Usage: runora [flags]
+
+Flags:
+  --version            Print Runora version and exit
+  --list-models        List all discovered models and exit
+  --status             Query running server instances and exit
+  --json               Format command output as JSON (used with --list-models or --status)
+  --data-dir <path>    Custom application data directory
+  --models <path>      Custom primary models directory
+  --reset-onboarding   Reset the interactive onboarding wizard
+```
 
 ---
 
-## Keyboard Navigation Guide
+## Keyboard Shortcuts
 
-Runora is fully keyboard-driven. Below are the key mappings available across the principal TUI screens:
+### Global Navigation
 
-### Main Browser Screen
+- `1` / `2` / `3` / `4` / `5` / `6`: Jump directly to screen (1: Models, 2: Dashboard, 3: Monitor, 4: Downloads, 5: Benchmark, 6: Settings).
+- `Tab` / `Shift+Tab` or `]` / `[`: Cycle forward / backward through the 6 main screens.
+- `Y`: Open interactive Theme Picker modal.
+- `L`: Open real-time Log Streamer.
+- `?`: Toggle help and key binding overlay.
+- `Q` / `Ctrl+C`: Stop all running instances and exit.
 
-- `↑` / `↓` or `k` / `j`: Move selection in the sidebar.
-- `Tab` / `Shift+Tab`: Toggle focus between the sidebar list and model details pane.
-- `/`: Activate search filter to quickly locate models by name, architecture, or filepath.
-- `Space` / `Enter`: Open the launch dashboard for the selected model.
-- `s` / `S`: Stop the currently selected model instance.
-- `Ctrl+S`: Terminate all active local servers.
-- `e` / `E`: Cycle task type for the selected model (TEXT_GENERATION, EMBEDDING, etc.).
-- `d` / `D`: Jump to the Download Manager screen.
-- `u` / `U`: Open the Settings / Lifecycle screen.
-- `m` / `M`: Open the Server Monitor screen (physical memory RSS tracking, request counters).
-- `v` / `V`: Open the Performance Benchmark History dashboard.
-- `b` / `B`: Run speed benchmark on the selected model.
-- `q` / `Ctrl+C`: Stop all running servers and quit the application.
+### [1] Models Screen
 
-### Settings / Lifecycle Screen
+- `↑` / `↓` or `k` / `j`: Move selection in the model list.
+- `Enter` / `Space`: Open Launch Dashboard for selected model.
+- `F`: Toggle favorite status.
+- `B`: Launch benchmark run for selected model.
+- `E`: Cycle task type (TEXT_GENERATION, EMBEDDING, VISION, etc.).
+- `/`: Activate search filter.
 
-- `1` / `2` / `3` or `Tab` / `Shift+Tab` / `↑` / `↓`: Switch focus between components (1: llama.cpp, 2: ONNX Runtime, 3: Runora App).
-- `C` / `Enter`: Check for updates on the selected runtime or application.
-- `U` / `Space`: Download and install updates for the selected runtime or application.
-- `R`: Roll back the selected runtime to the previous backup version.
-- `Y`: Cycle visual theme.
-- `T`: Edit Hugging Face API token (`HF_TOKEN`) for gated models.
-- `G`: Edit GitHub Personal Access Token (`GITHUB_TOKEN`) to expand release check rate limits.
-- `N`: Reset the interactive onboarding tour.
-- `Esc`: Return to the main model browser.
+### [2] Launch Dashboard
+
+- `←` / `→` or `h` / `l`: Move profile selection horizontally.
+- `↑` / `↓` or `k` / `j`: Move profile selection vertically across grid rows (5 per row).
+- `Enter`: Launch server with selected profile.
+- `P`: Create new custom launch profile.
+- `E`: Edit currently selected profile.
+- `N`: Duplicate currently selected profile.
+- `D`: Delete currently selected profile.
+- `C`: Copy generated CLI command string to clipboard.
+- `Esc`: Return to model explorer.
+
+### [3] Server Monitor
+
+- `↑` / `↓` or `k` / `j`: Select active server instance.
+- `R`: Restart selected server instance.
+- `S`: Stop selected server instance.
+- `Ctrl+K`: Terminate all active server instances.
+- `L`: Stream live logs for selected server instance.
+
+### [4] Downloads Screen
+
+- `Tab` / `Shift+Tab`: Switch focus between URL input, curated models, and download queue.
+- `Enter`: Queue model download.
+- `P`: Pause active download task.
+- `R`: Resume paused download task.
+- `X`: Cancel active download and remove temporary files.
+- `C`: Clear completed and failed tasks from queue.
+
+### [5] Benchmark Screen
+
+- `B`: Start a new benchmark run on the selected model.
+- `↑` / `↓`: Scroll benchmark history and throughput telemetry.
+
+### [6] Settings Screen
+
+- `1` / `2` / `3` / `4`: Select component (1: API Tokens, 2: llama.cpp, 3: ONNX Runtime, 4: Runora App).
+- `C` / `Enter`: Check for runtime/application updates.
+- `U` / `Space`: Download and install update slot.
+- `R`: Roll back selected component to backup.
+- `E`: Edit API tokens (GitHub / Hugging Face).
+- `S`: Save updated API tokens.
 
 ---
 
 ## Data Directory Layout
 
-All application files are stored inside a platform-conventional data folder (`%APPDATA%\runora` on Windows). The folder structure is organized as follows:
+Runora organizes all local state, binaries, and configurations within a clean, isolated data directory (`%LOCALAPPDATA%\runora` or `%APPDATA%\runora` on Windows, `~/.local/share/runora` on Linux, `~/Library/Application Support/runora` on macOS):
 
 ```text
 runora/
-├── config.json         # Persistent user preferences, favorites, and task overrides
-├── models/             # Root folder scanned recursively for GGUF/ONNX models
-├── llama.cpp/          # Local directory containing llama-server and CUDA DLLs
-├── llama.cpp.backup/   # Rollback backup folder created before updates
-├── onnxruntime/        # Dedicated folder containing ONNX shared libraries
-├── downloads/          # Temporary directory for active asset downloads
-└── profiles/           # Custom launch profile configuration files (.json)
-```
-
----
-
-## Configuration
-
-Custom launch profiles are defined in `.json` files inside the `profiles/` directory. Each profile specifies hardware offloading, threads, context sizes, and ports:
-
-```json
-{
-  "name": "Custom GPU Profile",
-  "context": 4096,
-  "threads": 4,
-  "gpu_layers": 999,
-  "batch_size": 512,
-  "host": "127.0.0.1",
-  "port": 50505
-}
+├── config.json              # Application preferences, favorites, and directory paths
+├── models/                  # Primary recursive model storage directory
+├── profiles/                # JSON profile configurations (5x5 Bento grid)
+├── benchmarks/              # Benchmark history database (history.json)
+├── downloads/               # Active download workspace and .part files
+├── cache/                   # GGUF metadata cache and runtime logs
+└── llama.cpp/               # Active llama.cpp runtime binary and CUDA DLLs
+    └── versions/            # Version slots (e.g. b4850/, v0.2.0/)
 ```
 
 ---

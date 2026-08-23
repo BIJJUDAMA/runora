@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-08-23
+
+### Added
+- Persistent Global Navigation Header across all views with 1-6 numeric hotkeys (`1`: Models, `2`: Dashboard, `3`: Monitor, `4`: Downloads, `5`: Benchmark, `6`: Settings) and bidirectional `Tab` / `Shift+Tab` and `[` / `]` cycling.
+- Persistent live hardware header telemetry displaying running server instance count and dynamic GPU VRAM meter.
+- Bento Card layout architecture across all screens with dynamic height clamping and vertical alignment.
+- 10 curated accessible themes (Dracula, Sunset, Nord, Cyberpunk, Forest, Monochrome, Solarized Light, Paper Light, and High Contrast WCAG AAA) with linear RGB gradient text and gauge rendering.
+- Interactive Theme Picker modal (`[Y]`) with live swatches and descriptions.
+- Non-intrusive floating toast notification system with ANSI compositing.
+- Real-time Log Streamer (`[L]`) with 250ms tailing, auto-scroll, regex filter (`[/]`), pause/resume (`[Space]`), syntax highlighting, and multi-instance tab switching (`[Tab]`).
+- 5-per-row Bento execution profile grid supporting up to 25 profiles with dynamic downward vertical expansion and 2D keyboard navigation (`[←/→/↑/↓]`).
+- Flash Attention enabled by default across all llama.cpp server invocations and profile presets (`--flash-attn`).
+- Quantized KV Cache support with `--cache-type-k` and `--cache-type-v` flags (`f16`, `q8_0`, `q4_0`, `fp8`).
+- Raw Custom CLI arguments field in profiles allowing arbitrary user-supplied arguments passed directly to `llama-server`.
+- Interactive 8-field Profile Creator and Editor supporting Name, Context, Threads, GPU Layers, Port, Flash Attention toggle, KV Quantization cycler, and Custom CLI Arguments.
+- Unrestricted profile deletion allowing removal of any custom or built-in default profile from disk.
+- Runtime version slots under `llama.cpp/versions/<tag>/` enabling side-by-side installations, instant version switching, listing, and cleanup.
+- Release channel selector supporting `Stable` (vX.Y.Z releases) and `Nightly` (upstream continuous tags) with explicit backend selection (CUDA 12, CUDA 13, Vulkan, CPU, ROCm, Metal).
+- Multi-GPU enumeration, total VRAM aggregation, and `TensorSplitAdvisor` GCD integer ratio calculation (e.g. 24GB + 16GB + 8GB -> `3,2,1`).
+- Physical CPU core vs logical thread topology detection across Windows, Linux, and macOS.
+- Apple Silicon Metal piecewise unified memory curve (67% to 92%).
+- Multi-part GGUF shard auto-grouping (`model-00001-of-00004.gguf`) into consolidated single model entries with aggregate sizes.
+- Multi-directory model discovery scanning primary and secondary paths (`Paths.ModelDirectories`).
+- Headless CLI flags: `--list-models` (with `--json`), `--status` (with `--json`), `--data-dir <path>`, `--models <path>`, `--version`, `--reset-onboarding`.
+- Comprehensive behavioral test suite hardening with boundary condition and error recovery validation.
+
+### Changed
+- Refactored model browser, launch dashboard, server monitor, downloader, benchmarks, and settings to full-screen Bento card layouts.
+- Updated Settings screen left panel to clean component hierarchy: API Token, llama.cpp, ONNX Runtime, Runora App.
+- Improved onboarding wizard with an 86-cell wide layout to eliminate awkward line wraps and support direct API credential configuration.
+- Enforced strict zero emoji invariant across all views, headers, footers, badges, and notifications.
+
+### Fixed
+- Fixed Windows file lock race condition in atomic file writing by adding exponential backoff retry loops during high-concurrency renames.
+- Fixed invisible UTF-8 BOM headers in Go source files that prevented statement coverage profiling.
+- Fixed single-owner `cmd.Wait()` race conditions in process supervisor during multi-threaded instance termination.
+- Fixed download queue range resumption and `.part` file cleanup on cancellation or completion.
+
 ## [1.1.1] - 2026-08-22
 
 ### Added
