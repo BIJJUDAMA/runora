@@ -331,3 +331,87 @@ func TestModelDirectories(t *testing.T) {
 	}
 }
 
+func TestConfigAPITokens(t *testing.T) {
+	// Test environment variable detection in defaultConfig
+	t.Run("EnvVarDetection", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "ghp_env_test_1")
+		t.Setenv("HF_TOKEN", "hf_env_test_1")
+
+		cfg := defaultConfig("")
+		if cfg.GitHubToken != "ghp_env_test_1" {
+			t.Errorf("expected GitHubToken from GITHUB_TOKEN to be %q, got %q", "ghp_env_test_1", cfg.GitHubToken)
+		}
+		if cfg.HuggingFaceToken != "hf_env_test_1" {
+			t.Errorf("expected HuggingFaceToken from HF_TOKEN to be %q, got %q", "hf_env_test_1", cfg.HuggingFaceToken)
+		}
+
+		// Test alternate env vars
+		t.Setenv("GITHUB_TOKEN", "")
+		t.Setenv("GH_TOKEN", "ghp_alternate_token")
+		t.Setenv("HF_TOKEN", "")
+		t.Setenv("HUGGING_FACE_HUB_TOKEN", "hf_hub_alternate_token")
+
+		cfgAlt := defaultConfig("")
+		if cfgAlt.GitHubToken != "ghp_alternate_token" {
+			t.Errorf("expected GitHubToken from GH_TOKEN to be %q, got %q", "ghp_alternate_token", cfgAlt.GitHubToken)
+		}
+		if cfgAlt.HuggingFaceToken != "hf_hub_alternate_token" {
+			t.Errorf("expected HuggingFaceToken from HUGGING_FACE_HUB_TOKEN to be %q, got %q", "hf_hub_alternate_token", cfgAlt.HuggingFaceToken)
+		}
+	})
+
+	// Test saving and loading with atomic file persistence
+	t.Run("SaveAndLoadPersistence", func(t *testing.T) {
+		// Clean env vars for predictable persistence testing
+		t.Setenv("GITHUB_TOKEN", "")
+		t.Setenv("GH_TOKEN", "")
+		t.Setenv("HF_TOKEN", "")
+		t.Setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+		tempDir, err := os.MkdirTemp("", "runora-tokens-test")
+		if err != nil {
+			t.Fatalf("failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		cfg, err := LoadFromDir(tempDir)
+		if err != nil {
+			t.Fatalf("failed to load initial config: %v", err)
+		}
+
+		cfg.GitHubToken = "ghp_test_token_secret_123"
+		cfg.HuggingFaceToken = "hf_token_secret_456"
+
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("failed to save config with tokens: %v", err)
+		}
+
+		// Verify on-disk file content
+		configPath := filepath.Join(tempDir, configFileName)
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read persisted config file: %v", err)
+		}
+		jsonStr := string(data)
+		if !strings.Contains(jsonStr, `"github_token": "ghp_test_token_secret_123"`) {
+			t.Errorf("persisted config missing github_token, got:\n%s", jsonStr)
+		}
+		if !strings.Contains(jsonStr, `"huggingface_token": "hf_token_secret_456"`) {
+			t.Errorf("persisted config missing huggingface_token, got:\n%s", jsonStr)
+		}
+
+		// Reload from disk and verify in-memory struct
+		reloaded, err := LoadFromDir(tempDir)
+		if err != nil {
+			t.Fatalf("failed to reload config: %v", err)
+		}
+		if reloaded.GitHubToken != "ghp_test_token_secret_123" {
+			t.Errorf("expected reloaded GitHubToken %q, got %q", "ghp_test_token_secret_123", reloaded.GitHubToken)
+		}
+		if reloaded.HuggingFaceToken != "hf_token_secret_456" {
+			t.Errorf("expected reloaded HuggingFaceToken %q, got %q", "hf_token_secret_456", reloaded.HuggingFaceToken)
+		}
+	})
+}
+
+

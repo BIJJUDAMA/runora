@@ -104,8 +104,9 @@ type Config struct {
 	Theme               string            `json:"theme"`
 	ModelProfiles       map[string]string `json:"model_profiles"`
 	ModelTasks          map[string]string `json:"model_tasks"`
-	HFToken             string            `json:"hf_token"`
-	GitHubToken         string            `json:"github_token"`
+	HFToken             string            `json:"hf_token,omitempty"`
+	GitHubToken         string            `json:"github_token,omitempty"`
+	HuggingFaceToken    string            `json:"huggingface_token,omitempty"`
 	OnboardingCompleted bool              `json:"onboarding_completed"`
 
 	// configPath is the resolved path to config.json on disk.
@@ -247,6 +248,19 @@ func LoadFromDir(dir string) (*Config, error) {
 	if cfg.RecentLaunches == nil {
 		cfg.RecentLaunches = []string{}
 	}
+	if cfg.GitHubToken == "" && defaults.GitHubToken != "" {
+		cfg.GitHubToken = defaults.GitHubToken
+	}
+	if cfg.HuggingFaceToken == "" {
+		if defaults.HuggingFaceToken != "" {
+			cfg.HuggingFaceToken = defaults.HuggingFaceToken
+		} else if cfg.HFToken != "" {
+			cfg.HuggingFaceToken = cfg.HFToken
+		}
+	}
+	if cfg.HFToken == "" && cfg.HuggingFaceToken != "" {
+		cfg.HFToken = cfg.HuggingFaceToken
+	}
 
 	if err := cfg.CreateDirectories(); err != nil {
 		return nil, err
@@ -269,6 +283,16 @@ func DefaultConfig() *Config {
 
 // defaultConfig returns a Config with all paths rooted at dir.
 func defaultConfig(dir string) *Config {
+	ghToken := os.Getenv("GITHUB_TOKEN")
+	if ghToken == "" {
+		ghToken = os.Getenv("GH_TOKEN")
+	}
+
+	hfToken := os.Getenv("HF_TOKEN")
+	if hfToken == "" {
+		hfToken = os.Getenv("HUGGING_FACE_HUB_TOKEN")
+	}
+
 	return &Config{
 		Paths: Paths{
 			Models:           filepath.Join(dir, "models"),
@@ -286,6 +310,9 @@ func defaultConfig(dir string) *Config {
 		Theme:               "forest",
 		ModelProfiles:       make(map[string]string),
 		ModelTasks:          make(map[string]string),
+		HFToken:             hfToken,
+		GitHubToken:         ghToken,
+		HuggingFaceToken:    hfToken,
 		OnboardingCompleted: false,
 		configPath:          filepath.Join(dir, configFileName),
 	}
