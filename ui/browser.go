@@ -48,11 +48,9 @@ type OnboardingStep int
 
 const (
 	StepWelcome OnboardingStep = iota
-	StepModelSidebar
-	StepDetailsPanel
-	StepLaunchDashboard
-	StepDownloadLifecycle
-	StepHFToken
+	StepStorage
+	StepTokens
+	StepRuntime
 	StepFinished
 )
 
@@ -102,7 +100,13 @@ type BrowserModel struct {
 	logStreamerModel      *LogStreamerModel
 	onboardingActive      bool
 	onboardingStep        OnboardingStep
-	onboardingTokenInput  textinput.Model
+	onboardingTokenInput  textinput.Model // Hugging Face token input
+	onboardingGHTokenInput textinput.Model // GitHub token input
+	onboardingTokenFocus  int             // 0 = GitHub Token, 1 = Hugging Face Token
+	onboardingChannel     runner.ReleaseChannel
+	onboardingBackend     runner.BackendType
+	onboardingBackendIdx  int
+	onboardingBackends    []runner.BackendType
 	focusRight            bool
 	llamaCPPMissingActive bool
 	toasts                *ToastManager
@@ -116,11 +120,32 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 	ti.CharLimit = 156
 	ti.Width = 30
 
+	ghTokenTi := textinput.New()
+	ghTokenTi.Placeholder = "Enter GitHub Token (optional)..."
+	ghTokenTi.CharLimit = 128
+	ghTokenTi.Width = 48
+	ghTokenTi.EchoMode = textinput.EchoPassword
+	ghTokenTi.EchoCharacter = '*'
+	ghTokenTi.SetValue(cfg.GitHubToken)
+
 	tokenTi := textinput.New()
 	tokenTi.Placeholder = "Enter Hugging Face Token (optional)..."
 	tokenTi.CharLimit = 128
-	tokenTi.Width = 40
+	tokenTi.Width = 48
+	tokenTi.EchoMode = textinput.EchoPassword
+	tokenTi.EchoCharacter = '*'
 	tokenTi.SetValue(cfg.HFToken)
+
+	backends := []runner.BackendType{
+		runner.BackendCUDA12,
+		runner.BackendVulkan,
+		runner.BackendMetal,
+		runner.BackendCPU,
+	}
+	defaultBackendIdx := 0
+	if runtime.GOOS == "darwin" {
+		defaultBackendIdx = 2
+	}
 
 	q := model.NewDownloadQueue(cfg.Paths.Models, cfg.HFToken)
 
@@ -162,6 +187,12 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 		onboardingActive:      !cfg.OnboardingCompleted && flag.Lookup("test.v") == nil,
 		onboardingStep:        StepWelcome,
 		onboardingTokenInput:  tokenTi,
+		onboardingGHTokenInput: ghTokenTi,
+		onboardingTokenFocus:   0,
+		onboardingChannel:      runner.ChannelStable,
+		onboardingBackend:      backends[defaultBackendIdx],
+		onboardingBackendIdx:   defaultBackendIdx,
+		onboardingBackends:     backends,
 		llamaCPPMissingActive: llamaCPPMissing && flag.Lookup("test.v") == nil,
 		toasts:                NewToastManager(),
 	}
@@ -347,48 +378,175 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	if m.onboardingActive {
-		// StepHFToken is hoisted out first so that ALL message types (key events,
-		// bracketed-paste PasteMsg, window resize, etc.) are trapped here and never
-		// leak to the main browser handler where keys like "v" trigger navigation.
-		if m.onboardingStep == StepHFToken {
+		// StepTokens has interactive text inputs for GitHub and Hugging Face tokens
+		if m.onboardingStep == StepTokens {
 			if keyMsg, ok := msg.(tea.KeyMsg); ok {
 				switch keyMsg.String() {
+				case "tab", "down":
+					if m.onboardingTokenFocus == 0 {
+						m.onboardingTokenFocus = 1
+						m.onboardingGHTokenInput.Blur()
+						m.onboardingTokenInput.Focus()
+					} else {
+						m.onboardingTokenFocus = 0
+						m.onboardingTokenInput.Blur()
+						m.onboardingGHTokenInput.Focus()
+					}
+					return m, nil
+				case "shift+tab", "up":
+					if m.onboardingTokenFocus == 1 {
+						m.onboardingTokenFocus = 0
+						m.onboardingTokenInput.Blur()
+						m.onboardingGHTokenInput.Focus()
+					} else {
+						m.onboardingTokenFocus = 1
+						m.onboardingGHTokenInput.Blur()
+						m.onboardingTokenInput.Focus()
+					}
+					return m, nil
 				case "enter":
-					tokenValue := strings.TrimSpace(m.onboardingTokenInput.Value())
-					m.config.HFToken = tokenValue
-					m.downloadQueue.UpdateToken(tokenValue)
+					ghToken := strings.TrimSpace(m.onboardingGHTokenInput.Value())
+					hfToken := strings.TrimSpace(m.onboardingTokenInput.Value())
+					m.config.GitHubToken = ghToken
+					m.config.HFToken = hfToken
+					m.config.HuggingFaceToken = hfToken
+					if m.downloadQueue != nil {
+						m.downloadQueue.UpdateToken(hfToken)
+					}
 					_ = m.config.Save()
+					m.onboardingGHTokenInput.Blur()
 					m.onboardingTokenInput.Blur()
 					m.onboardingStep++
+					return m, nil
 				case "esc":
 					m.onboardingActive = false
 					m.config.OnboardingCompleted = true
 					_ = m.config.Save()
+					return m, nil
 				case "ctrl+v":
-					pasteFromClipboard(&m.onboardingTokenInput)
+					if m.onboardingTokenFocus == 0 {
+						pasteFromClipboard(&m.onboardingGHTokenInput)
+					} else {
+						pasteFromClipboard(&m.onboardingTokenInput)
+					}
+					return m, nil
 				case "ctrl+b":
+					m.onboardingGHTokenInput.Blur()
 					m.onboardingTokenInput.Blur()
 					m.onboardingStep--
+					return m, nil
 				default:
-					// Forward all other keys to the input.
 					var cmd tea.Cmd
-					m.onboardingTokenInput, cmd = m.onboardingTokenInput.Update(msg)
+					if m.onboardingTokenFocus == 0 {
+						m.onboardingGHTokenInput, cmd = m.onboardingGHTokenInput.Update(msg)
+					} else {
+						m.onboardingTokenInput, cmd = m.onboardingTokenInput.Update(msg)
+					}
 					if cmd != nil {
 						cmds = append(cmds, cmd)
 					}
 				}
 			} else {
-				// Forward all other messages to the textinput so the bubbles library can handle them.
-				var cmd tea.Cmd
-				m.onboardingTokenInput, cmd = m.onboardingTokenInput.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
+				var cmd1, cmd2 tea.Cmd
+				if m.onboardingTokenFocus == 0 {
+					m.onboardingGHTokenInput, cmd1 = m.onboardingGHTokenInput.Update(msg)
+				} else {
+					m.onboardingTokenInput, cmd2 = m.onboardingTokenInput.Update(msg)
+				}
+				if cmd1 != nil {
+					cmds = append(cmds, cmd1)
+				}
+				if cmd2 != nil {
+					cmds = append(cmds, cmd2)
 				}
 			}
-			// Always return early during StepHFToken for all input/mouse messages
-			// so they don't leak, but allow background messages to fall through.
+			// Swallowing input/mouse events during StepTokens so they don't leak
 			switch msg.(type) {
 			case tea.KeyMsg, tea.MouseMsg:
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		if m.onboardingStep == StepRuntime {
+			if keyMsg, ok := msg.(tea.KeyMsg); ok {
+				switch keyMsg.String() {
+				case "c", "C", "left", "right", "h", "l":
+					if m.onboardingChannel == runner.ChannelStable {
+						m.onboardingChannel = runner.ChannelNightly
+					} else {
+						m.onboardingChannel = runner.ChannelStable
+					}
+					if m.lifecycleModel != nil {
+						m.lifecycleModel.SelectedChannel = m.onboardingChannel
+					}
+				case "a", "A", "up", "k":
+					m.onboardingBackendIdx--
+					if m.onboardingBackendIdx < 0 {
+						m.onboardingBackendIdx = len(m.onboardingBackends) - 1
+					}
+					m.onboardingBackend = m.onboardingBackends[m.onboardingBackendIdx]
+					if m.lifecycleModel != nil {
+						m.lifecycleModel.SelectedBackend = m.onboardingBackend
+					}
+				case "down", "j":
+					m.onboardingBackendIdx++
+					if m.onboardingBackendIdx >= len(m.onboardingBackends) {
+						m.onboardingBackendIdx = 0
+					}
+					m.onboardingBackend = m.onboardingBackends[m.onboardingBackendIdx]
+					if m.lifecycleModel != nil {
+						m.lifecycleModel.SelectedBackend = m.onboardingBackend
+					}
+				case "1":
+					m.onboardingBackendIdx = 0
+					m.onboardingBackend = m.onboardingBackends[m.onboardingBackendIdx]
+					if m.lifecycleModel != nil {
+						m.lifecycleModel.SelectedBackend = m.onboardingBackend
+					}
+				case "2":
+					if len(m.onboardingBackends) > 1 {
+						m.onboardingBackendIdx = 1
+						m.onboardingBackend = m.onboardingBackends[m.onboardingBackendIdx]
+						if m.lifecycleModel != nil {
+							m.lifecycleModel.SelectedBackend = m.onboardingBackend
+						}
+					}
+				case "3":
+					if len(m.onboardingBackends) > 2 {
+						m.onboardingBackendIdx = 2
+						m.onboardingBackend = m.onboardingBackends[m.onboardingBackendIdx]
+						if m.lifecycleModel != nil {
+							m.lifecycleModel.SelectedBackend = m.onboardingBackend
+						}
+					}
+				case "4":
+					if len(m.onboardingBackends) > 3 {
+						m.onboardingBackendIdx = 3
+						m.onboardingBackend = m.onboardingBackends[m.onboardingBackendIdx]
+						if m.lifecycleModel != nil {
+							m.lifecycleModel.SelectedBackend = m.onboardingBackend
+						}
+					}
+				case "enter", "space", "n", "N":
+					if m.lifecycleModel != nil {
+						m.lifecycleModel.SelectedChannel = m.onboardingChannel
+						m.lifecycleModel.SelectedBackend = m.onboardingBackend
+					}
+					m.onboardingStep++
+				case "p", "P", "b", "B":
+					m.onboardingStep--
+					if m.onboardingStep == StepTokens {
+						if m.onboardingTokenFocus == 0 {
+							m.onboardingGHTokenInput.Focus()
+						} else {
+							m.onboardingTokenInput.Focus()
+						}
+					}
+				case "esc", "q", "Q":
+					m.onboardingActive = false
+					m.config.OnboardingCompleted = true
+					_ = m.config.Save()
+				}
 				return m, tea.Batch(cmds...)
 			}
 		}
@@ -402,15 +560,23 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_ = m.config.Save()
 				} else {
 					m.onboardingStep++
-					if m.onboardingStep == StepHFToken {
-						m.onboardingTokenInput.Focus()
+					if m.onboardingStep == StepTokens {
+						if m.onboardingTokenFocus == 0 {
+							m.onboardingGHTokenInput.Focus()
+						} else {
+							m.onboardingTokenInput.Focus()
+						}
 					}
 				}
 			case "p", "P", "b", "B":
 				if m.onboardingStep > StepWelcome {
 					m.onboardingStep--
-					if m.onboardingStep == StepHFToken {
-						m.onboardingTokenInput.Focus()
+					if m.onboardingStep == StepTokens {
+						if m.onboardingTokenFocus == 0 {
+							m.onboardingGHTokenInput.Focus()
+						} else {
+							m.onboardingTokenInput.Focus()
+						}
 					}
 				}
 			case "esc", "q", "Q":
@@ -568,6 +734,21 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case hardwareDetectMsg:
 		if msg.err == nil {
 			m.hardwareSpecs = msg.specs
+			if m.hardwareSpecs != nil {
+				if m.hardwareSpecs.IsUnified || runtime.GOOS == "darwin" {
+					m.onboardingBackendIdx = 2
+					m.onboardingBackend = runner.BackendMetal
+				} else if strings.Contains(strings.ToLower(m.hardwareSpecs.GPU.Name), "nvidia") || m.hardwareSpecs.GPU.Type == "CUDA" {
+					m.onboardingBackendIdx = 0
+					m.onboardingBackend = runner.BackendCUDA12
+				} else if m.hardwareSpecs.GPU.VRAM > 0 {
+					m.onboardingBackendIdx = 1
+					m.onboardingBackend = runner.BackendVulkan
+				} else {
+					m.onboardingBackendIdx = 3
+					m.onboardingBackend = runner.BackendCPU
+				}
+			}
 		}
 
 	case profilesMsg:
@@ -1669,11 +1850,6 @@ func (m *BrowserModel) View() string {
 		rightBorderColor := ColorBorder
 
 		if m.onboardingActive {
-			if m.onboardingStep == StepModelSidebar {
-				leftBorderColor = ColorPrimary
-			} else if m.onboardingStep == StepDetailsPanel {
-				rightBorderColor = ColorPrimary
-			}
 			leftTitle = StyleTitle.Render("Models")
 			rightTitle = StyleTitle.Render("Details")
 		} else {
@@ -1748,54 +1924,194 @@ func (m *BrowserModel) onboardingOverlayView(width int, height int) string {
 	var sb strings.Builder
 	sb.WriteString("\n")
 
-	var stepTitle, stepDesc string
-	switch m.onboardingStep {
-	case StepWelcome:
-		stepTitle = "Welcome to Runora!"
-		stepDesc = "Runora is your local AI control center.\nThis quick tour will guide you through all the core features.\n\nPress [Enter / Space] to begin, or [Esc] to skip."
-	case StepModelSidebar:
-		stepTitle = "1. Model Discovery & Sidebar"
-		stepDesc = "On the left is the Models Sidebar.\n- Models are recursively discovered under your models/ directory.\n- Navigate them using [Up / Down Arrow keys].\n- Press [F] to toggle favoriting a model for quick access."
-	case StepDetailsPanel:
-		stepTitle = "2. Model Specifications & Suitability"
-		stepDesc = "On the right is the Details Panel.\n- Here you can see parsed GGUF metadata (architecture, parameters, etc.).\n- It automatically estimates VRAM and system memory usage.\n- If a model exceeds your hardware specs, a warning is displayed."
-	case StepLaunchDashboard:
-		stepTitle = "3. Profiles & Launching"
-		stepDesc = "Press [Enter] on a selected model to open the Launch Dashboard.\n- Choose a context profile (Fast, Balanced, High, CPU, etc.).\n- View the exact llama.cpp command that will be launched.\n- Press [P] to create a custom profile."
-	case StepDownloadLifecycle:
-		stepTitle = "4. Downloader & Lifecycle Manager"
-		stepDesc = "Additional utility panels are accessible via hotkeys:\n- Press [D] to open the Downloader to pull models directly via URL.\n- Press [U] to open the Lifecycle Manager (check/apply updates or rollback backups)."
-	case StepHFToken:
-		stepTitle = "5. Hugging Face Access (Optional)"
-		stepDesc = "To download gated models (e.g. Llama, Gemma) or private repos, configure your HF Token here:\n\n" + m.onboardingTokenInput.View() + "\n\nPress [Enter] to save and continue."
-	case StepFinished:
-		stepTitle = "Tour Completed!"
-		stepDesc = "You are all set to manage local AI models!\n\nPress [Enter / Space / Esc] to exit the tour and start exploring."
+	boxWidth := 86
+	if width > 0 && boxWidth > width-6 {
+		boxWidth = width - 6
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
 	}
 
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle)))
-	sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepDesc)))
+	var stepTitle, stepSub, stepIndicator string
+	switch m.onboardingStep {
+	case StepWelcome:
+		stepIndicator = "Step 1 of 5  ● ○ ○ ○ ○"
+		stepTitle = "WELCOME TO RUNORA"
+		stepSub = "Runora is your local AI control center for managing, profiling, and\n  running high-performance GGUF & ONNX models completely offline."
+
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle), StyleMuted.Render(stepIndicator)))
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepSub)))
+
+		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("◆ Detected System Hardware:")))
+		if m.hardwareSpecs != nil {
+			osStr := m.hardwareSpecs.OS
+			if osStr == "" {
+				osStr = runtime.GOOS
+			}
+			cpuModel := m.hardwareSpecs.CPU.Model
+			if cpuModel == "" {
+				cpuModel = "Detected CPU"
+			}
+			cores := m.hardwareSpecs.CPU.PhysicalCores
+			threads := m.hardwareSpecs.CPU.Threads
+			var coreInfo string
+			if cores > 0 && threads > 0 {
+				coreInfo = fmt.Sprintf("%d cores (%d threads)", cores, threads)
+			} else if threads > 0 {
+				coreInfo = fmt.Sprintf("%d threads", threads)
+			} else {
+				coreInfo = "Multi-core"
+			}
+			cpuStr := fmt.Sprintf("%s (%s)", cpuModel, coreInfo)
+
+			ramStr := fmt.Sprintf("%s total (%s available)", formatSize(int64(m.hardwareSpecs.RAM.Total)), formatSize(int64(m.hardwareSpecs.RAM.Available)))
+			if m.hardwareSpecs.RAM.Total == 0 {
+				ramStr = "System RAM detected"
+			}
+
+			gpuName := m.hardwareSpecs.GPU.Name
+			if gpuName == "" {
+				gpuName = "Integrated / Host GPU"
+			}
+			var vramStr string
+			if m.hardwareSpecs.IsUnified {
+				vramStr = fmt.Sprintf("%s (Apple Silicon Unified Memory)", formatSize(int64(m.hardwareSpecs.GPU.VRAM)))
+			} else if m.hardwareSpecs.GPU.VRAM > 0 {
+				vramStr = fmt.Sprintf("%s VRAM", formatSize(int64(m.hardwareSpecs.GPU.VRAM)))
+			} else {
+				vramStr = "Shared System Memory"
+			}
+
+			sb.WriteString(fmt.Sprintf("  %-16s %s\n", "OS Platform:", osStr))
+			sb.WriteString(fmt.Sprintf("  %-16s %s\n", "CPU Processor:", cpuStr))
+			sb.WriteString(fmt.Sprintf("  %-16s %s\n", "System RAM:", ramStr))
+			sb.WriteString(fmt.Sprintf("  %-16s %s\n", "GPU Device:", gpuName))
+			sb.WriteString(fmt.Sprintf("  %-16s %s\n\n", "VRAM / Memory:", vramStr))
+		} else {
+			sb.WriteString("  Detecting hardware specifications...\n\n")
+		}
+		sb.WriteString("  Runora automatically benchmarks and tailors model context limits to your VRAM.\n\n")
+
+	case StepStorage:
+		stepIndicator = "Step 2 of 5  ● ● ○ ○ ○"
+		stepTitle = "MODEL STORAGE & DIRECTORIES"
+		stepSub = "Runora discovers and manages models directly from your local filesystem."
+
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle), StyleMuted.Render(stepIndicator)))
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepSub)))
+
+		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("◆ Configured Storage Locations:")))
+		sb.WriteString(fmt.Sprintf("  %-18s %s\n", "Primary Models:", m.config.Paths.Models))
+		sb.WriteString(fmt.Sprintf("  %-18s %s\n", "Model Cache:", m.config.Paths.Cache))
+		sb.WriteString(fmt.Sprintf("  %-18s %s\n", "Profiles Path:", m.config.Paths.Profiles))
+		sb.WriteString(fmt.Sprintf("  %-18s %s\n\n", "Downloads Path:", m.config.Paths.Downloads))
+
+		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("◆ Storage Architecture:")))
+		sb.WriteString("  ● Recursive Discovery: Subfolders (e.g. models/llm, models/vlm) are indexed automatically.\n")
+		sb.WriteString("  ● Zero Weight Loading: GGUF headers are parsed in milliseconds without consuming VRAM.\n")
+		sb.WriteString("  ● Custom Directories:  Add secondary model folders at any time in Settings [U].\n\n")
+
+	case StepTokens:
+		stepIndicator = "Step 3 of 5  ● ● ● ○ ○"
+		stepTitle = "API TOKENS CONFIGURATION"
+		stepSub = "Configure optional API credentials for unlimited releases and gated model access."
+
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle), StyleMuted.Render(stepIndicator)))
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepSub)))
+
+		ghPrefix := "  [1] "
+		hfPrefix := "  [2] "
+		ghLabel := "GitHub Token (Optional - increases engine download rate limits):"
+		hfLabel := "Hugging Face Token (Optional - downloads gated models e.g. Llama-3, Gemma):"
+
+		if m.onboardingTokenFocus == 0 {
+			sb.WriteString(fmt.Sprintf("%s%s\n", ghPrefix, lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(ghLabel)))
+			sb.WriteString(fmt.Sprintf("      %s\n\n", m.onboardingGHTokenInput.View()))
+			sb.WriteString(fmt.Sprintf("%s%s\n", hfPrefix, StyleMuted.Render(hfLabel)))
+			sb.WriteString(fmt.Sprintf("      %s\n\n", m.onboardingTokenInput.View()))
+		} else {
+			sb.WriteString(fmt.Sprintf("%s%s\n", ghPrefix, StyleMuted.Render(ghLabel)))
+			sb.WriteString(fmt.Sprintf("      %s\n\n", m.onboardingGHTokenInput.View()))
+			sb.WriteString(fmt.Sprintf("%s%s\n", hfPrefix, lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(hfLabel)))
+			sb.WriteString(fmt.Sprintf("      %s\n\n", m.onboardingTokenInput.View()))
+		}
+
+		sb.WriteString("  ● Press [Tab / Up / Down] to switch between token input fields.\n")
+		sb.WriteString("  ● Press [Ctrl+V] to paste from clipboard (masked with * for security).\n")
+		sb.WriteString("  ● Tokens are saved locally to config.json and never transmitted externally.\n\n")
+
+	case StepRuntime:
+		stepIndicator = "Step 4 of 5  ● ● ● ● ○"
+		stepTitle = "RUNTIME ENGINE & ACCELERATOR"
+		stepSub = "Configure the llama.cpp inference engine release channel and accelerator backend."
+
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle), StyleMuted.Render(stepIndicator)))
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepSub)))
+
+		sb.WriteString("  ◆ Release Channel (Press [C] or [Left/Right] to toggle):\n")
+		if m.onboardingChannel == runner.ChannelStable {
+			sb.WriteString(fmt.Sprintf("    %s %-10s - Recommended, battle-tested official releases\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[*]"), lipgloss.NewStyle().Bold(true).Render("Stable")))
+			sb.WriteString(fmt.Sprintf("    %s %-10s - Bleeding-edge builds with latest architecture support\n\n", StyleMuted.Render("[ ]"), "Nightly"))
+		} else {
+			sb.WriteString(fmt.Sprintf("    %s %-10s - Recommended, battle-tested official releases\n", StyleMuted.Render("[ ]"), "Stable"))
+			sb.WriteString(fmt.Sprintf("    %s %-10s - Bleeding-edge builds with latest architecture support\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[*]"), lipgloss.NewStyle().Bold(true).Render("Nightly")))
+		}
+
+		sb.WriteString("  ◆ Hardware Accelerator (Press [A] or [Up/Down] to select):\n")
+		backendDescriptions := []struct {
+			backend runner.BackendType
+			name    string
+			desc    string
+		}{
+			{runner.BackendCUDA12, "CUDA", "NVIDIA GeForce, RTX, and Tesla GPUs (CUDA 12.x / 13.x)"},
+			{runner.BackendVulkan, "Vulkan", "AMD Radeon, Intel Arc, and universal cross-vendor GPU acceleration"},
+			{runner.BackendMetal, "Metal", "Apple Silicon M-Series unified memory GPU (macOS)"},
+			{runner.BackendCPU, "CPU", "Universal x86_64 / ARM64 CPU execution (AVX2 / AVX-512)"},
+		}
+
+		for i, b := range backendDescriptions {
+			if m.onboardingBackendIdx == i || m.onboardingBackend == b.backend {
+				sb.WriteString(fmt.Sprintf("    %s %-8s - %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[*]"), lipgloss.NewStyle().Bold(true).Render(b.name), b.desc))
+			} else {
+				sb.WriteString(fmt.Sprintf("    %s %-8s - %s\n", StyleMuted.Render("[ ]"), b.name, StyleMuted.Render(b.desc)))
+			}
+		}
+		sb.WriteString("\n")
+
+	case StepFinished:
+		stepIndicator = "Step 5 of 5  ● ● ● ● ●"
+		stepTitle = "SETUP COMPLETED"
+		stepSub = "Runora is ready! Use the following keyboard shortcuts to manage local AI:"
+
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle), StyleMuted.Render(stepIndicator)))
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepSub)))
+
+		sb.WriteString("  ◆ Quick Navigation Guide:\n")
+		sb.WriteString(fmt.Sprintf("    ● %-22s Browse models and view parsed GGUF metadata\n", StyleHelpKey.Render("[Up / Down / j / k]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Open Launch Dashboard & choose inference profile\n", StyleHelpKey.Render("[Enter]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Model Downloader (Hugging Face repo browser & direct URL)\n", StyleHelpKey.Render("[D]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Lifecycle Manager & Engine Settings (updates / rollback)\n", StyleHelpKey.Render("[U]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Live Server Monitor & Resource Telemetry\n", StyleHelpKey.Render("[M]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Real-time Server Log Streamer\n", StyleHelpKey.Render("[L]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Theme Picker & Visual Color Schemes\n", StyleHelpKey.Render("[Y]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Filter and search models by name or tag\n", StyleHelpKey.Render("[/]")))
+		sb.WriteString(fmt.Sprintf("    ● %-22s Toggle Help & Command Reference\n\n", StyleHelpKey.Render("[?]")))
+
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render("[ Enter / Space ] Start Exploring Runora ->")))
+	}
 
 	// Navigation instructions footer
 	var navHelp string
 	if m.onboardingStep == StepWelcome {
-		navHelp = fmt.Sprintf("  %s Next  %s Skip Tour", StyleHelpKey.Render("[Enter/Space]"), StyleHelpKey.Render("[Esc]"))
+		navHelp = fmt.Sprintf("  %s Next  %s Skip Setup", StyleHelpKey.Render("[Enter/Space]"), StyleHelpKey.Render("[Esc]"))
+	} else if m.onboardingStep == StepTokens {
+		navHelp = fmt.Sprintf("  %s Save & Next  %s Back  %s Skip Setup", StyleHelpKey.Render("[Enter]"), StyleHelpKey.Render("[Ctrl+B]"), StyleHelpKey.Render("[Esc]"))
 	} else if m.onboardingStep == StepFinished {
-		navHelp = fmt.Sprintf("  %s Finish Tour", StyleHelpKey.Render("[Enter/Space]"))
-	} else if m.onboardingStep == StepHFToken {
-		navHelp = fmt.Sprintf("  %s Save & Next  %s Back  %s Skip Tour", StyleHelpKey.Render("[Enter]"), StyleHelpKey.Render("[Ctrl+B]"), StyleHelpKey.Render("[Esc]"))
+		navHelp = fmt.Sprintf("  %s Finish Setup  %s Back", StyleHelpKey.Render("[Enter/Space/Esc]"), StyleHelpKey.Render("[P/B]"))
 	} else {
-		navHelp = fmt.Sprintf("  %s Next  %s Back  %s Skip Tour", StyleHelpKey.Render("[Enter/Space]"), StyleHelpKey.Render("[P/B]"), StyleHelpKey.Render("[Esc]"))
+		navHelp = fmt.Sprintf("  %s Next  %s Back  %s Skip Setup", StyleHelpKey.Render("[Enter/Space]"), StyleHelpKey.Render("[P/B]"), StyleHelpKey.Render("[Esc]"))
 	}
 	sb.WriteString(navHelp + "\n")
-
-	boxWidth := width - 8
-	if boxWidth < 50 {
-		boxWidth = 50
-	}
-	if boxWidth > 70 {
-		boxWidth = 70
-	}
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).

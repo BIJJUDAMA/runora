@@ -466,6 +466,7 @@ var (
 	StyleHelpKey          lipgloss.Style
 	StyleSearchActive     lipgloss.Style
 	StyleStar             lipgloss.Style
+	StyleMuted            lipgloss.Style
 
 	// Status Badges
 	StyleBadgeRunning  lipgloss.Style
@@ -563,6 +564,9 @@ func ApplyTheme(themeName string) {
 
 	StyleStar = lipgloss.NewStyle().
 		Foreground(ColorGold)
+
+	StyleMuted = lipgloss.NewStyle().
+		Foreground(ColorMuted)
 
 	StyleBadgeRunning = lipgloss.NewStyle().
 		Background(ColorSecondary).

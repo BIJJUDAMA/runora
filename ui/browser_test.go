@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
@@ -580,11 +581,11 @@ func TestBrowserOnboardingTour(t *testing.T) {
 		t.Errorf("expected onboarding to start at StepWelcome, got %d", bm.onboardingStep)
 	}
 
-	// Press Enter to advance to next step
+	// Press Enter to advance to StepStorage
 	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
-	if bm.onboardingStep != StepModelSidebar {
-		t.Errorf("expected onboarding to advance to StepModelSidebar, got %d", bm.onboardingStep)
+	if bm.onboardingStep != StepStorage {
+		t.Errorf("expected onboarding to advance to StepStorage, got %d", bm.onboardingStep)
 	}
 
 	// Press 'b' to go back
@@ -594,26 +595,37 @@ func TestBrowserOnboardingTour(t *testing.T) {
 		t.Errorf("expected onboarding to go back to StepWelcome, got %d", bm.onboardingStep)
 	}
 
-	// Advance to StepHFToken (Welcome -> Sidebar -> Details -> Launch -> Download/Lifecycle -> HFToken)
-	for i := 0; i < 5; i++ {
-		m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-		bm = m.(*BrowserModel)
-	}
-	if bm.onboardingStep != StepHFToken {
-		t.Fatalf("expected step to be StepHFToken (5), got %v", bm.onboardingStep)
+	// Advance to StepTokens (Welcome -> Storage -> Tokens)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepTokens {
+		t.Fatalf("expected step to be StepTokens, got %v", bm.onboardingStep)
 	}
 
-	// Simulate typing a token
-	bm.onboardingTokenInput.SetValue("test_token_123")
-	// Press enter on StepHFToken to submit it
+	// Simulate typing tokens
+	bm.onboardingGHTokenInput.SetValue("ghp_test_token_123")
+	bm.onboardingTokenInput.SetValue("hf_test_token_456")
+	// Press enter on StepTokens to submit
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
 
+	if bm.onboardingStep != StepRuntime {
+		t.Errorf("expected step to advance to StepRuntime, got %v", bm.onboardingStep)
+	}
+	if bm.config.GitHubToken != "ghp_test_token_123" {
+		t.Errorf("expected config GitHubToken to be ghp_test_token_123, got %q", bm.config.GitHubToken)
+	}
+	if bm.config.HFToken != "hf_test_token_456" {
+		t.Errorf("expected config HFToken to be hf_test_token_456, got %q", bm.config.HFToken)
+	}
+
+	// Advance to StepFinished
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
 	if bm.onboardingStep != StepFinished {
 		t.Errorf("expected step to advance to StepFinished, got %v", bm.onboardingStep)
-	}
-	if bm.config.HFToken != "test_token_123" {
-		t.Errorf("expected config HFToken to be test_token_123, got %q", bm.config.HFToken)
 	}
 
 	// Test that background messages like discoverMsg fall through during onboarding
@@ -633,6 +645,178 @@ func TestBrowserOnboardingTour(t *testing.T) {
 	}
 	if !bm.config.OnboardingCompleted {
 		t.Errorf("expected OnboardingCompleted to be set to true in config")
+	}
+}
+
+func TestOnboardingWizardFlowWide(t *testing.T) {
+	// Backup user config if exists
+	hasUserConfig := false
+	if _, err := os.Stat("config.json"); err == nil {
+		hasUserConfig = true
+		_ = os.Rename("config.json", "config.json.tmp")
+	}
+	defer func() {
+		_ = os.Remove("config.json")
+		if hasUserConfig {
+			_ = os.Rename("config.json.tmp", "config.json")
+		}
+	}()
+
+	cfg := config.DefaultConfig()
+	cfg.OnboardingCompleted = false
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.onboardingActive = true
+	bm.width = 120
+	bm.height = 36
+
+	// 1. Verify 86-cell width bounds
+	renderedWide := bm.onboardingOverlayView(120, 36)
+	wideWidth := lipgloss.Width(renderedWide)
+	// Box style has Width(86) plus DoubleBorder (2) and Padding(1, 2) (4) = 92
+	if wideWidth < 86 {
+		t.Errorf("expected wide width (%d) to be at least 86 cells", wideWidth)
+	}
+
+	// When width is constrained to 70 cells:
+	renderedNarrow := bm.onboardingOverlayView(70, 36)
+	narrowWidth := lipgloss.Width(renderedNarrow)
+	if narrowWidth >= wideWidth {
+		t.Errorf("expected narrow width (%d) to be smaller than wide width (%d)", narrowWidth, wideWidth)
+	}
+
+	// Helper to assert zero emojis in rendered string
+	assertZeroEmojis := func(stepName string, content string) {
+		for _, r := range content {
+			if (r >= 0x1F600 && r <= 0x1F64F) || // Emoticons
+				(r >= 0x1F300 && r <= 0x1F5FF) || // Misc Symbols and Pictographs
+				(r >= 0x1F680 && r <= 0x1F6FF) || // Transport and Map
+				(r >= 0x1F700 && r <= 0x1F77F) || // Alchemical Symbols
+				(r >= 0x1F780 && r <= 0x1F7FF) || // Geometric Shapes Extended
+				(r >= 0x1F800 && r <= 0x1F8FF) || // Supplemental Arrows-C
+				(r >= 0x1F900 && r <= 0x1F9FF) || // Supplemental Symbols and Pictographs
+				(r >= 0x1FA00 && r <= 0x1FA6F) || // Chess Symbols
+				(r >= 0x1FA70 && r <= 0x1FAFF) || // Symbols and Pictographs Extended-A
+				(r >= 0x2600 && r <= 0x26FF && r != 0x2605 && r != 0x2606) || // Misc symbols
+				(r >= 0x2700 && r <= 0x27BF && r != 0x2713 && r != 0x2717) { // Dingbats
+				t.Errorf("found emoji %q (code: %U) in step %s", r, r, stepName)
+			}
+		}
+	}
+
+	// Check Step 1: StepWelcome
+	if bm.onboardingStep != StepWelcome {
+		t.Fatalf("expected StepWelcome (0), got %v", bm.onboardingStep)
+	}
+	assertZeroEmojis("StepWelcome", bm.onboardingOverlayView(120, 36))
+
+	// Advance to Step 2: StepStorage
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepStorage {
+		t.Fatalf("expected StepStorage (1), got %v", bm.onboardingStep)
+	}
+	assertZeroEmojis("StepStorage", bm.onboardingOverlayView(120, 36))
+
+	// Advance to Step 3: StepTokens
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepTokens {
+		t.Fatalf("expected StepTokens (2), got %v", bm.onboardingStep)
+	}
+	assertZeroEmojis("StepTokens", bm.onboardingOverlayView(120, 36))
+
+	// Test back navigation from StepTokens with Ctrl+B
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepStorage {
+		t.Fatalf("expected StepStorage after Ctrl+B, got %v", bm.onboardingStep)
+	}
+
+	// Return to StepTokens
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepTokens {
+		t.Fatalf("expected StepTokens, got %v", bm.onboardingStep)
+	}
+
+	// Test tab switching in StepTokens
+	if bm.onboardingTokenFocus != 0 {
+		t.Errorf("expected initial token focus 0 (GitHub token), got %d", bm.onboardingTokenFocus)
+	}
+	// Type into GitHub token
+	for _, ch := range "ghp_securetoken999" {
+		m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		bm = m.(*BrowserModel)
+	}
+	if bm.onboardingGHTokenInput.Value() != "ghp_securetoken999" {
+		t.Errorf("expected gh token input to be ghp_securetoken999, got %q", bm.onboardingGHTokenInput.Value())
+	}
+
+	// Switch focus to Hugging Face token with Tab
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	bm = m.(*BrowserModel)
+	if bm.onboardingTokenFocus != 1 {
+		t.Errorf("expected token focus to switch to 1 (HF token), got %d", bm.onboardingTokenFocus)
+	}
+	for _, ch := range "hf_supersecret888" {
+		m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		bm = m.(*BrowserModel)
+	}
+	if bm.onboardingTokenInput.Value() != "hf_supersecret888" {
+		t.Errorf("expected hf token input to be hf_supersecret888, got %q", bm.onboardingTokenInput.Value())
+	}
+
+	// Submit tokens with Enter
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+
+	// Step 4: StepRuntime
+	if bm.onboardingStep != StepRuntime {
+		t.Fatalf("expected StepRuntime (3), got %v", bm.onboardingStep)
+	}
+	assertZeroEmojis("StepRuntime", bm.onboardingOverlayView(120, 36))
+
+	// Verify config saved tokens
+	if bm.config.GitHubToken != "ghp_securetoken999" {
+		t.Errorf("expected config.GitHubToken to be saved as ghp_securetoken999, got %q", bm.config.GitHubToken)
+	}
+	if bm.config.HFToken != "hf_supersecret888" {
+		t.Errorf("expected config.HFToken to be saved as hf_supersecret888, got %q", bm.config.HFToken)
+	}
+
+	// Test toggling release channel with 'c'
+	initChannel := bm.onboardingChannel
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	bm = m.(*BrowserModel)
+	if bm.onboardingChannel == initChannel {
+		t.Errorf("expected release channel to toggle after pressing 'c'")
+	}
+
+	// Test cycling accelerator with 'a'
+	initBackend := bm.onboardingBackend
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	bm = m.(*BrowserModel)
+	if bm.onboardingBackend == initBackend && len(bm.onboardingBackends) > 1 {
+		t.Errorf("expected backend to change after pressing 'a'")
+	}
+
+	// Advance to Step 5: StepFinished
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepFinished {
+		t.Fatalf("expected StepFinished (4), got %v", bm.onboardingStep)
+	}
+	assertZeroEmojis("StepFinished", bm.onboardingOverlayView(120, 36))
+
+	// Complete onboarding with Enter
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
+	if bm.onboardingActive {
+		t.Errorf("expected onboarding to be inactive after finishing")
+	}
+	if !bm.config.OnboardingCompleted {
+		t.Errorf("expected config.OnboardingCompleted to be true")
 	}
 }
 
