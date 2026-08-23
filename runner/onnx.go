@@ -1,4 +1,4 @@
-﻿package runner
+package runner
 
 // OnnxRuntime coordinates ONNX model execution through the ProcessSupervisor and OnnxDriver.
 type OnnxRuntime struct {

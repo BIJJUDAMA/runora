@@ -1,4 +1,4 @@
-﻿package hardware
+package hardware
 
 // Hardware provides convenience helpers and high-level wrappers for hardware detection and management.
 
