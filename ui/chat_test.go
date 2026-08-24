@@ -153,8 +153,8 @@ func TestChatModelParameterOverlay(t *testing.T) {
 	cm := NewChatModel(svc, nil, nil, nil, nil, nil)
 	cm.state = chatStateIdle
 
-	// Press P to open parameters overlay
-	cm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
+	// Press Ctrl+P to open parameters overlay
+	cm.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	if cm.state != chatStateParamOverlay {
 		t.Fatalf("expected state chatStateParamOverlay, got %v", cm.state)
 	}
@@ -373,9 +373,51 @@ func TestChatModelMultipleGGUFServersSelect(t *testing.T) {
 			cm.activeSession.Port, cm.activeSession.ModelPath)
 	}
 
-	// Press M to switch models
-	cm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("M")})
+	// Press Ctrl+S to switch models
+	cm.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cm.state != chatStateInstanceSelect {
-		t.Fatalf("expected state chatStateInstanceSelect after pressing M, got %v", cm.state)
+		t.Fatalf("expected state chatStateInstanceSelect after pressing Ctrl+S, got %v", cm.state)
+	}
+}
+
+func TestChatModelSlashCommands(t *testing.T) {
+	svc := &mockChatService{
+		sessions: []*chat.Session{
+			{
+				ID:   "sess-1",
+				Name: "Chat 1",
+				Port: 50505,
+				Messages: []chat.Message{
+					{Role: "user", Content: "Hello"},
+					{Role: "assistant", Content: "Hi there"},
+				},
+			},
+		},
+	}
+	rt := &mockChatRuntime{
+		status: runner.StatusRunning,
+		instances: []runner.InstanceInfo{
+			{Port: 50505, ModelPath: "models/llama-3.1-8b.gguf"},
+		},
+	}
+
+	cm := NewChatModel(svc, rt, nil, nil, nil, nil)
+	cm.state = chatStateIdle
+
+	// Test /params command
+	cm.textarea.SetValue("/params")
+	cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cm.state != chatStateParamOverlay {
+		t.Fatalf("expected state chatStateParamOverlay after /params, got %v", cm.state)
+	}
+
+	// Close overlay
+	cm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Test /clear command
+	cm.textarea.SetValue("/clear")
+	cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(cm.activeSession.Messages) != 0 {
+		t.Fatalf("expected 0 messages after /clear, got %d", len(cm.activeSession.Messages))
 	}
 }

@@ -574,49 +574,84 @@ func (m *ChatModel) Update(msg tea.Msg) (*ChatModel, tea.Cmd) {
 			} else {
 				// Chat View / Input focused
 				switch msg.String() {
-				case "ctrl+enter":
+				case "ctrl+enter", "ctrl+j", "alt+enter":
 					m.textarea.InsertString("\n")
+					return m, nil
+				case "ctrl+k":
+					return m, m.triggerCompactCmd()
+				case "ctrl+p":
+					m.state = chatStateParamOverlay
+					if m.activeSession != nil {
+						m.sysPromptIn = m.activeSession.Params.SystemPrompt
+					}
+					return m, nil
+				case "ctrl+s", "ctrl+o", "alt+m":
+					instances := m.getRunningGGUFInstances()
+					if len(instances) > 1 {
+						m.runningInstances = instances
+						m.state = chatStateInstanceSelect
+						m.instanceCursor = 0
+						return m, nil
+					} else if len(instances) == 1 {
+						m.showToast(fmt.Sprintf("Using active model: %s (Port %d)", filepath.Base(instances[0].ModelPath), instances[0].Port), ToastInfo)
+						return m, nil
+					} else {
+						m.state = chatStateNoServer
+						return m, nil
+					}
+				case "ctrl+y":
+					m.copyLastAssistantMessage()
 					return m, nil
 				case "enter":
 					text := strings.TrimSpace(m.textarea.Value())
 					if text != "" {
+						// Slash command support
+						switch strings.ToLower(text) {
+						case "/compact":
+							m.textarea.Reset()
+							return m, m.triggerCompactCmd()
+						case "/params":
+							m.textarea.Reset()
+							m.state = chatStateParamOverlay
+							if m.activeSession != nil {
+								m.sysPromptIn = m.activeSession.Params.SystemPrompt
+							}
+							return m, nil
+						case "/model", "/models":
+							m.textarea.Reset()
+							instances := m.getRunningGGUFInstances()
+							if len(instances) > 1 {
+								m.runningInstances = instances
+								m.state = chatStateInstanceSelect
+								m.instanceCursor = 0
+								return m, nil
+							} else if len(instances) == 1 {
+								m.showToast(fmt.Sprintf("Using active model: %s (Port %d)", filepath.Base(instances[0].ModelPath), instances[0].Port), ToastInfo)
+								return m, nil
+							} else {
+								m.state = chatStateNoServer
+								return m, nil
+							}
+						case "/clear":
+							m.textarea.Reset()
+							if m.activeSession != nil {
+								m.activeSession.Messages = nil
+								m.activeSession.Checkpoints = nil
+								_ = m.service.SaveSession(m.activeSession)
+								m.updateContextMetrics()
+								m.showToast("Conversation cleared", ToastInfo)
+							}
+							return m, nil
+						case "/help":
+							m.textarea.Reset()
+							m.showToast("Commands: /compact, /params, /model, /clear | Keys: [Ctrl+K] Compact, [Ctrl+P] Params, [Ctrl+M] Model, [Ctrl+Y] Copy", ToastInfo)
+							return m, nil
+						}
+
 						m.textarea.Reset()
 						return m, m.sendMessageCmd(text)
 					}
 					return m, nil
-				case "m", "M":
-					if msg.Type == tea.KeyRunes && len(m.textarea.Value()) == 0 {
-						instances := m.getRunningGGUFInstances()
-						if len(instances) > 1 {
-							m.runningInstances = instances
-							m.state = chatStateInstanceSelect
-							m.instanceCursor = 0
-							return m, nil
-						} else if len(instances) == 1 {
-							m.showToast(fmt.Sprintf("Using active model: %s (Port %d)", filepath.Base(instances[0].ModelPath), instances[0].Port), ToastInfo)
-							return m, nil
-						} else {
-							m.state = chatStateNoServer
-							return m, nil
-						}
-					}
-				case "k", "K":
-					if msg.Type == tea.KeyRunes && len(m.textarea.Value()) == 0 {
-						return m, m.triggerCompactCmd()
-					}
-				case "p", "P":
-					if msg.Type == tea.KeyRunes && len(m.textarea.Value()) == 0 {
-						m.state = chatStateParamOverlay
-						if m.activeSession != nil {
-							m.sysPromptIn = m.activeSession.Params.SystemPrompt
-						}
-						return m, nil
-					}
-				case "c", "C":
-					if msg.Type == tea.KeyRunes && len(m.textarea.Value()) == 0 {
-						m.copyLastAssistantMessage()
-						return m, nil
-					}
 				case "pgup":
 					if m.chatHistoryScroll > 0 {
 						m.chatHistoryScroll -= 5
@@ -916,7 +951,7 @@ func (m *ChatModel) renderChatCard(width, height int) string {
 
 	// Action hints
 	hints := lipgloss.NewStyle().Foreground(ColorTextMuted).Render(
-		"[Enter] Send | [Ctrl+Enter] Newline | [M] Switch Model | [K] Compact | [P] Params | [C] Copy | [Tab] Switch Pane",
+		"[Enter] Send | [Ctrl+Enter] Newline | [Ctrl+S] Model | [Ctrl+K] Compact | [Ctrl+P] Params | [Ctrl+Y] Copy | [Tab] Pane",
 	)
 
 	inputArea := lipgloss.JoinVertical(lipgloss.Left,
