@@ -1264,19 +1264,11 @@ func TestBrowserFloatingToastsOnActions(t *testing.T) {
 		t.Errorf("expected toast after toggling favorite")
 	}
 
-	// 2. Cycle task with 'e'
-	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-	bm = m.(*BrowserModel)
-
-	if bm.models[0].Task != "EMBEDDING" {
-		t.Errorf("expected task to cycle to EMBEDDING, got %s", bm.models[0].Task)
-	}
-
-	// 3. Stop server with 's'
+	// 2. Stop server with 's'
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	bm = m.(*BrowserModel)
 
-	if bm.toasts.Count() < 3 {
+	if bm.toasts.Count() < 2 {
 		t.Errorf("expected multiple toasts after actions, got %d", bm.toasts.Count())
 	}
 

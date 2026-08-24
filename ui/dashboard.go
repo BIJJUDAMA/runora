@@ -95,8 +95,10 @@ func (d *DashboardModel) GetLaunchCommand() string {
 		"--threads", fmt.Sprintf("%d", p.Threads),
 		"--n-gpu-layers", fmt.Sprintf("%d", p.GPULayers),
 		"--batch-size", fmt.Sprintf("%d", p.BatchSize),
-		"--flash-attn",
 	)
+	if p.FlashAttention {
+		parts = append(parts, "--flash-attn", "on")
+	}
 	if p.CacheTypeK != "" {
 		parts = append(parts, "--cache-type-k", p.CacheTypeK)
 	}
@@ -328,7 +330,7 @@ func (d *DashboardModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 	profileContent.WriteString(fmt.Sprintf("  %-18s %d threads\n", "Thread Count:", p.Threads))
 	profileContent.WriteString(fmt.Sprintf("  %-18s %d layers\n", "GPU Layers:", p.GPULayers))
 
-	faStatus := "Enabled (--flash-attn)"
+	faStatus := "Enabled (--flash-attn on)"
 	if !p.FlashAttention {
 		faStatus = "Disabled"
 	}

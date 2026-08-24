@@ -1553,39 +1553,6 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.toasts != nil {
 					cmds = append(cmds, m.toasts.ShowWarning("All servers stopped"))
 				}
-			case "e", "E":
-				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
-					item := m.sidebarItems[m.selected]
-					if item.Type == ItemModelEntry {
-						selectedModel := m.models[item.ModelIdx]
-						var nextTask string
-						switch selectedModel.Task {
-						case "TEXT_GENERATION":
-							nextTask = "EMBEDDING"
-						case "EMBEDDING":
-							nextTask = "RERANKING"
-						case "RERANKING":
-							nextTask = "SPEECH_TO_TEXT"
-						case "SPEECH_TO_TEXT":
-							nextTask = "TEXT_TO_SPEECH"
-						case "TEXT_TO_SPEECH":
-							nextTask = "IMAGE_GENERATION"
-						case "IMAGE_GENERATION":
-							nextTask = "VISION"
-						case "VISION":
-							nextTask = "MULTIMODAL"
-						default:
-							nextTask = "TEXT_GENERATION"
-						}
-						selectedModel.Task = nextTask
-						m.config.ModelTasks[selectedModel.FilePath] = nextTask
-						_ = m.config.Save()
-						m.rebuildSidebar()
-						if m.toasts != nil {
-							cmds = append(cmds, m.toasts.Show(fmt.Sprintf("Task set to: %s", nextTask)))
-						}
-					}
-				}
 			case "f", "F":
 				if m.selected >= 0 && m.selected < len(m.sidebarItems) {
 					item := m.sidebarItems[m.selected]
@@ -2009,7 +1976,6 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Architecture:", selectedModel.Architecture))
 		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Quantization:", selectedModel.Quantization))
 		overviewSb.WriteString(fmt.Sprintf("  %-16s %s\n", "Runtime:", selectedModel.Runtime))
-		overviewSb.WriteString(fmt.Sprintf("  %-16s %s (Press [E] to cycle)\n", "Task Type:", selectedModel.Task))
 
 		var statusText string
 		isRunning := m.isModelRunning(selectedModel.FilePath)
@@ -2300,7 +2266,6 @@ func (m *BrowserModel) renderFooter(width int) string {
 			fmt.Sprintf("%s Launch", StyleHelpKey.Render("[Enter]")),
 			fmt.Sprintf("%s Favorite", StyleHelpKey.Render("[F]")),
 			fmt.Sprintf("%s Bench", StyleHelpKey.Render("[B]")),
-			fmt.Sprintf("%s Task", StyleHelpKey.Render("[E]")),
 			fmt.Sprintf("%s Logs", StyleHelpKey.Render("[L]")),
 			fmt.Sprintf("%s Themes", StyleHelpKey.Render("[Y]")),
 			fmt.Sprintf("%s Search", StyleHelpKey.Render("[/]")),
@@ -2317,7 +2282,7 @@ func (m *BrowserModel) renderFooter(width int) string {
 		Render(breadcrumb)
 
 	pillsStr := strings.Join(pills, " │ ")
-	navHint := StyleMuted.Render("[1-6 / Tab] Navigate Screens")
+	navHint := StyleMuted.Render("[1-7 / Tab] Navigate Screens")
 
 	footerContent := fmt.Sprintf(" %s  %s  │  %s", badge, pillsStr, navHint)
 	return StyleHelp.Render(footerContent)

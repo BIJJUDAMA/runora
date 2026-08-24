@@ -73,8 +73,9 @@ func (d *LlamaCppDriver) BuildCommand(ctx context.Context, modelPath string, opt
 	if opts.BatchSize > 0 {
 		args = append(args, "--batch-size", fmt.Sprintf("%d", opts.BatchSize))
 	}
-	// Flash Attention is enabled by default for all llama.cpp server launches
-	args = append(args, "--flash-attn")
+	if opts.FlashAttention {
+		args = append(args, "--flash-attn", "on")
+	}
 
 	if opts.CacheTypeK != "" {
 		args = append(args, "--cache-type-k", opts.CacheTypeK)

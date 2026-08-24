@@ -111,16 +111,17 @@ func TestLlamaCppDriverCommandArgs(t *testing.T) {
 
 	driver := NewLlamaCppDriver()
 	opts := StartOptions{
-		LlamaCppDir: tempDir,
-		Host:        "127.0.0.1",
-		Port:        8080,
-		ContextSize: 4096,
-		Threads:     8,
-		GPULayers:   999,
-		BatchSize:   512,
-		CacheTypeK:  "q8_0",
-		CacheTypeV:  "q4_0",
-		CustomArgs:  "--temp 0.7 --top-p 0.9",
+		LlamaCppDir:    tempDir,
+		Host:           "127.0.0.1",
+		Port:           8080,
+		ContextSize:    4096,
+		Threads:        8,
+		GPULayers:      999,
+		BatchSize:      512,
+		FlashAttention: true,
+		CacheTypeK:     "q8_0",
+		CacheTypeV:     "q4_0",
+		CustomArgs:     "--temp 0.7 --top-p 0.9",
 	}
 
 	cmd, err := driver.BuildCommand(nil, "model.gguf", opts, nil)
@@ -136,7 +137,7 @@ func TestLlamaCppDriverCommandArgs(t *testing.T) {
 	hasTopP := false
 
 	for i, a := range args {
-		if a == "--flash-attn" {
+		if a == "--flash-attn" && i+1 < len(args) && args[i+1] == "on" {
 			hasFlashAttn = true
 		}
 		if a == "--cache-type-k" && i+1 < len(args) && args[i+1] == "q8_0" {
