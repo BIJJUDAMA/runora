@@ -22,13 +22,17 @@ type chatState int
 
 const (
 	chatStateIdle chatState = iota
-	chatStatePicking
+	chatStateNoServer
+	chatStateInstanceSelect
 	chatStateStreaming
 	chatStateCompacting
 	chatStateParamOverlay
 	chatStateRenaming
 	chatStateDeleting
 )
+
+type ChatNavigateToLaunchMsg struct{}
+type ChatNavigateToBrowserMsg struct{}
 
 type chatTokenMsg struct {
 	chunk chat.TokenChunk
@@ -72,13 +76,14 @@ type ChatModel struct {
 	contextTotal int
 	warnCompact  bool
 
-	textarea     textarea.Model
-	renameInput  string
-	paramFocus   int // 0: Temp, 1: TopP, 2: TopK, 3: Context, 4: SystemPrompt
-	sysPromptIn  string
-	pickerCursor int
-	toasts       *ToastManager
-	mouseReg     *mouse.Registry
+	textarea         textarea.Model
+	renameInput      string
+	paramFocus       int // 0: Temp, 1: TopP, 2: TopK, 3: Context
+	sysPromptIn      string
+	instanceCursor   int
+	runningInstances []runner.InstanceInfo
+	toasts           *ToastManager
+	mouseReg         *mouse.Registry
 
 	chatHistoryScroll int
 }
@@ -113,7 +118,79 @@ func NewChatModel(
 	}
 
 	m.ReloadSessions()
+	m.RefreshRunningInstances()
 	return m
+}
+
+// getRunningGGUFInstances returns active server instances whose model is a GGUF file.
+func (m *ChatModel) getRunningGGUFInstances() []runner.InstanceInfo {
+	if m.runtime == nil {
+		return nil
+	}
+	var list []runner.InstanceInfo
+	for _, inst := range m.runtime.GetAllInstances() {
+		ext := strings.ToLower(filepath.Ext(inst.ModelPath))
+		if ext == ".gguf" {
+			list = append(list, inst)
+		}
+	}
+	return list
+}
+
+// RefreshRunningInstances updates active instance bindings according to running GGUF models.
+func (m *ChatModel) RefreshRunningInstances() {
+	m.runningInstances = m.getRunningGGUFInstances()
+
+	// 0 running GGUF instances
+	if len(m.runningInstances) == 0 {
+		if m.state != chatStateRenaming && m.state != chatStateDeleting && m.state != chatStateParamOverlay {
+			m.state = chatStateNoServer
+		}
+		return
+	}
+
+	// Exactly 1 running GGUF instance -> automatically bind to it
+	if len(m.runningInstances) == 1 {
+		inst := m.runningInstances[0]
+		if m.activeSession != nil {
+			if m.activeSession.Port != inst.Port || m.activeSession.ModelPath != inst.ModelPath {
+				m.activeSession.Port = inst.Port
+				m.activeSession.ModelPath = inst.ModelPath
+				if m.service != nil {
+					_ = m.service.SaveSession(m.activeSession)
+				}
+			}
+		}
+		if m.state == chatStateNoServer || m.state == chatStateInstanceSelect {
+			m.state = chatStateIdle
+		}
+		m.updateContextMetrics()
+		return
+	}
+
+	// Multiple running GGUF instances
+	if m.activeSession != nil {
+		found := false
+		for _, inst := range m.runningInstances {
+			if inst.Port == m.activeSession.Port && inst.ModelPath == m.activeSession.ModelPath {
+				found = true
+				break
+			}
+		}
+		if found {
+			if m.state == chatStateNoServer {
+				m.state = chatStateIdle
+			}
+			m.updateContextMetrics()
+			return
+		}
+	}
+
+	// If not currently bound to any valid running instance, show selector
+	if m.state == chatStateNoServer || m.state == chatStateIdle {
+		m.state = chatStateInstanceSelect
+		m.instanceCursor = 0
+	}
 }
 
 // ReloadSessions loads all saved sessions from disk.
@@ -133,12 +210,10 @@ func (m *ChatModel) ReloadSessions() {
 			// Auto create first session
 			port := 50505
 			modelPath := ""
-			if m.runtime != nil {
-				_, mp, p := m.runtime.GetStatus()
-				if p > 0 {
-					port = p
-				}
-				modelPath = mp
+			running := m.getRunningGGUFInstances()
+			if len(running) > 0 {
+				port = running[0].Port
+				modelPath = running[0].ModelPath
 			}
 			newSess, err := m.service.NewSession("Chat 1", modelPath, port, chat.DefaultChatParams())
 			if err == nil {
@@ -266,7 +341,7 @@ func (m *ChatModel) Update(msg tea.Msg) (*ChatModel, tea.Cmd) {
 				_ = m.service.SaveSession(m.activeSession)
 			}
 			m.showToast("Model server ready for chat", ToastSuccess)
-		} else if m.state == chatStatePicking {
+		} else if m.state == chatStateNoServer {
 			cmds = append(cmds, pollServerStatusCmd(m.runtime))
 		}
 
@@ -342,35 +417,96 @@ func (m *ChatModel) Update(msg tea.Msg) (*ChatModel, tea.Cmd) {
 				return m, nil
 			}
 
-		case chatStatePicking:
+		case chatStateNoServer:
+			switch msg.String() {
+			case "enter", "2":
+				return m, func() tea.Msg { return ChatNavigateToLaunchMsg{} }
+			case "1":
+				return m, func() tea.Msg { return ChatNavigateToBrowserMsg{} }
+			case "tab":
+				m.sessionsFocus = !m.sessionsFocus
+				if !m.sessionsFocus {
+					m.textarea.Focus()
+				} else {
+					m.textarea.Blur()
+				}
+				return m, nil
+			}
+			if m.sessionsFocus {
+				switch msg.String() {
+				case "up", "k":
+					if m.selectedSess > 0 {
+						m.selectedSess--
+						m.activeSession = m.sessions[m.selectedSess]
+					}
+					return m, nil
+				case "down", "j":
+					if m.selectedSess < len(m.sessions)-1 {
+						m.selectedSess++
+						m.activeSession = m.sessions[m.selectedSess]
+					}
+					return m, nil
+				case "n", "N":
+					sessName := fmt.Sprintf("Chat %d", len(m.sessions)+1)
+					newSess, err := m.service.NewSession(sessName, "", 50505, chat.DefaultChatParams())
+					if err == nil {
+						m.activeSession = newSess
+						m.ReloadSessions()
+						for idx, s := range m.sessions {
+							if s.ID == newSess.ID {
+								m.selectedSess = idx
+								break
+							}
+						}
+						m.showToast("New session created", ToastSuccess)
+					}
+					return m, nil
+				case "d", "D":
+					if m.activeSession != nil {
+						m.state = chatStateDeleting
+					}
+					return m, nil
+				case "r", "R":
+					if m.activeSession != nil {
+						m.renameInput = m.activeSession.Name
+						m.state = chatStateRenaming
+					}
+					return m, nil
+				}
+			}
+
+		case chatStateInstanceSelect:
 			switch msg.String() {
 			case "esc":
-				m.state = chatStateIdle
+				if m.activeSession != nil && m.activeSession.Port > 0 {
+					m.state = chatStateIdle
+				}
 				return m, nil
 			case "up", "k":
-				if m.pickerCursor > 0 {
-					m.pickerCursor--
+				if m.instanceCursor > 0 {
+					m.instanceCursor--
 				}
 				return m, nil
 			case "down", "j":
-				if m.pickerCursor < len(m.allModels)-1 {
-					m.pickerCursor++
+				if m.instanceCursor < len(m.runningInstances)-1 {
+					m.instanceCursor++
 				}
 				return m, nil
 			case "enter":
-				if len(m.allModels) > 0 && m.pickerCursor < len(m.allModels) {
-					targetModel := m.allModels[m.pickerCursor]
-					if m.runtime != nil {
-						_ = m.runtime.Start(targetModel.FilePath, runner.StartOptions{
-							Port:        50505,
-							ContextSize: 8192,
-							Host:        "127.0.0.1",
-						})
-						m.showToast("Launching model: "+targetModel.Name, ToastInfo)
-						cmds = append(cmds, pollServerStatusCmd(m.runtime))
+				if len(m.runningInstances) > 0 && m.instanceCursor < len(m.runningInstances) {
+					target := m.runningInstances[m.instanceCursor]
+					if m.activeSession != nil {
+						m.activeSession.Port = target.Port
+						m.activeSession.ModelPath = target.ModelPath
+						if m.service != nil {
+							_ = m.service.SaveSession(m.activeSession)
+						}
 					}
+					m.state = chatStateIdle
+					m.updateContextMetrics()
+					m.showToast(fmt.Sprintf("Connected to %s (Port %d)", filepath.Base(target.ModelPath), target.Port), ToastSuccess)
 				}
-				return m, tea.Batch(cmds...)
+				return m, nil
 			}
 
 		case chatStateIdle:
@@ -404,8 +540,10 @@ func (m *ChatModel) Update(msg tea.Msg) (*ChatModel, tea.Cmd) {
 				case "n", "N":
 					port := 50505
 					mp := ""
-					if m.runtime != nil {
-						_, mp, port = m.runtime.GetStatus()
+					running := m.getRunningGGUFInstances()
+					if len(running) > 0 {
+						port = running[0].Port
+						mp = running[0].ModelPath
 					}
 					sessName := fmt.Sprintf("Chat %d", len(m.sessions)+1)
 					newSess, err := m.service.NewSession(sessName, mp, port, chat.DefaultChatParams())
@@ -446,6 +584,22 @@ func (m *ChatModel) Update(msg tea.Msg) (*ChatModel, tea.Cmd) {
 						return m, m.sendMessageCmd(text)
 					}
 					return m, nil
+				case "m", "M":
+					if msg.Type == tea.KeyRunes && len(m.textarea.Value()) == 0 {
+						instances := m.getRunningGGUFInstances()
+						if len(instances) > 1 {
+							m.runningInstances = instances
+							m.state = chatStateInstanceSelect
+							m.instanceCursor = 0
+							return m, nil
+						} else if len(instances) == 1 {
+							m.showToast(fmt.Sprintf("Using active model: %s (Port %d)", filepath.Base(instances[0].ModelPath), instances[0].Port), ToastInfo)
+							return m, nil
+						} else {
+							m.state = chatStateNoServer
+							return m, nil
+						}
+					}
 				case "k", "K":
 					if msg.Type == tea.KeyRunes && len(m.textarea.Value()) == 0 {
 						return m, m.triggerCompactCmd()
@@ -565,15 +719,30 @@ func (m *ChatModel) sendMessageCmd(text string) tea.Cmd {
 			return chatStreamDoneMsg{chunk: chat.TokenChunk{Err: fmt.Errorf("no active session")}}
 		}
 
-		// Ensure server is running
-		if m.runtime != nil {
-			status, mp, port := m.runtime.GetStatus()
-			if status != runner.StatusRunning {
-				m.state = chatStatePicking
-				return nil
+		instances := m.getRunningGGUFInstances()
+		if len(instances) == 0 {
+			m.state = chatStateNoServer
+			return chatStreamDoneMsg{chunk: chat.TokenChunk{Err: fmt.Errorf("no GGUF model server running - launch a model in the Launch tab first")}}
+		}
+
+		if len(instances) == 1 {
+			m.activeSession.Port = instances[0].Port
+			m.activeSession.ModelPath = instances[0].ModelPath
+		} else {
+			// Multiple running instances: check if activeSession matches one
+			found := false
+			for _, inst := range instances {
+				if inst.Port == m.activeSession.Port && inst.ModelPath == m.activeSession.ModelPath {
+					found = true
+					break
+				}
 			}
-			m.activeSession.Port = port
-			m.activeSession.ModelPath = mp
+			if !found {
+				m.runningInstances = instances
+				m.state = chatStateInstanceSelect
+				m.instanceCursor = 0
+				return chatStreamDoneMsg{chunk: chat.TokenChunk{Err: fmt.Errorf("multiple models running - please select which model to use")}}
+			}
 		}
 
 		// Auto-compact before send if above 85% threshold
@@ -650,8 +819,11 @@ func (m *ChatModel) renderSessionsCard(width, height int) string {
 }
 
 func (m *ChatModel) renderChatCard(width, height int) string {
-	if m.state == chatStatePicking {
-		return m.renderModelPickerCard(width, height)
+	if m.state == chatStateNoServer {
+		return m.renderNoServerCard(width, height)
+	}
+	if m.state == chatStateInstanceSelect {
+		return m.renderInstanceSelectCard(width, height)
 	}
 	if m.state == chatStateParamOverlay {
 		return m.renderParametersOverlay(width, height)
@@ -744,7 +916,7 @@ func (m *ChatModel) renderChatCard(width, height int) string {
 
 	// Action hints
 	hints := lipgloss.NewStyle().Foreground(ColorTextMuted).Render(
-		"[Enter] Send | [Ctrl+Enter] Newline | [K] Compact | [P] Params | [C] Copy | [Tab] Switch Pane",
+		"[Enter] Send | [Ctrl+Enter] Newline | [M] Switch Model | [K] Compact | [P] Params | [C] Copy | [Tab] Switch Pane",
 	)
 
 	inputArea := lipgloss.JoinVertical(lipgloss.Left,
@@ -772,27 +944,36 @@ func (m *ChatModel) renderChatCard(width, height int) string {
 	return SurfaceCardWithHeight(title, fullContent, width, height, !m.sessionsFocus, badge)
 }
 
-func (m *ChatModel) renderModelPickerCard(width, height int) string {
+func (m *ChatModel) renderNoServerCard(width, height int) string {
 	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("No Model Server Active\n\n"))
-	b.WriteString("Select a discovered model to launch directly into Chat:\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).Render("No GGUF Server Running\n\n"))
+	b.WriteString("Chat Playground connects directly to an active local GGUF model server.\n\n")
+	b.WriteString("Currently, no GGUF server instance is running.\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Render("-> Go to the [2] Launch tab to configure an execution profile and launch a model.\n\n"))
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("Note: Only GGUF models are supported for interactive chat.\n\n"))
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("[Enter] / [2] Go to Launch Tab | [1] Browse Models | [Tab] Switch Pane"))
+	return SurfaceCardWithHeight("Chat Playground", b.String(), width, height, !m.sessionsFocus, "No Active Model")
+}
 
-	if len(m.allModels) == 0 {
-		b.WriteString(lipgloss.NewStyle().Foreground(ColorTextMuted).Render("No models found in models directory."))
-	} else {
-		for i, mod := range m.allModels {
-			prefix := "  "
-			style := lipgloss.NewStyle().Foreground(ColorText)
-			if i == m.pickerCursor {
-				prefix = "> "
-				style = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true)
-			}
-			b.WriteString(style.Render(fmt.Sprintf("%s%s (%s, %s)\n", prefix, mod.Name, mod.Architecture, mod.Quantization)))
+func (m *ChatModel) renderInstanceSelectCard(width, height int) string {
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Render("Multiple GGUF Servers Running\n\n"))
+	b.WriteString("Select which active model instance to chat with:\n\n")
+
+	for i, inst := range m.runningInstances {
+		prefix := "  "
+		style := lipgloss.NewStyle().Foreground(ColorText)
+		if i == m.instanceCursor {
+			prefix = "> "
+			style = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true)
 		}
+		modelName := filepath.Base(inst.ModelPath)
+		uptimeStr := inst.Uptime.Round(time.Second).String()
+		b.WriteString(style.Render(fmt.Sprintf("%s%s (Port: %d, PID: %d, Uptime: %s)\n", prefix, modelName, inst.Port, inst.PID, uptimeStr)))
 	}
 
-	b.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorTextMuted).Render("[Enter] Launch Model | [Esc] Back"))
-	return SurfaceCardWithHeight("Model Launcher", b.String(), width, height, true, "Launch Required")
+	b.WriteString("\n" + lipgloss.NewStyle().Foreground(ColorTextMuted).Render("[Enter] Connect to Model | [Esc] Cancel | [Up/Down] Navigate"))
+	return SurfaceCardWithHeight("Select Model Server", b.String(), width, height, true, "Select Instance")
 }
 
 func (m *ChatModel) renderParametersOverlay(width, height int) string {

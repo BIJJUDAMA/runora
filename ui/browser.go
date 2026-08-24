@@ -352,6 +352,7 @@ func (m *BrowserModel) navigateToScreen(target ScreenMode) tea.Cmd {
 		if m.chatModel != nil {
 			m.chatModel.SetModels(m.models)
 			m.chatModel.ReloadSessions()
+			m.chatModel.RefreshRunningInstances()
 		}
 	}
 	return tea.Batch(cmds...)
@@ -1207,7 +1208,11 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.serverUIStatus = UIStatusStopped
 		}
 
-		cmds = append(cmds, tickCmd())
+	case ChatNavigateToLaunchMsg:
+		return m, m.navigateToScreen(ScreenDashboard)
+
+	case ChatNavigateToBrowserMsg:
+		return m, m.navigateToScreen(ScreenBrowser)
 
 	case tea.KeyMsg:
 		// 1. Search input in Model Browser screen

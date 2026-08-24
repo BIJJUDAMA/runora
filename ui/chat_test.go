@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/BIJJUDAMA/runora/chat"
 	"github.com/BIJJUDAMA/runora/model"
+	"github.com/BIJJUDAMA/runora/runner"
 )
 
 type mockChatService struct {
@@ -117,6 +118,7 @@ func TestChatModelBasicRendering(t *testing.T) {
 	}
 
 	cm := NewChatModel(svc, nil, []*model.GGUFMetadata{}, nil, nil, nil)
+	cm.state = chatStateIdle
 	rendered := cm.View(100, 30)
 
 	if !strings.Contains(rendered, "Sessions") {
@@ -149,6 +151,7 @@ func TestChatModelParameterOverlay(t *testing.T) {
 	}
 
 	cm := NewChatModel(svc, nil, nil, nil, nil, nil)
+	cm.state = chatStateIdle
 
 	// Press P to open parameters overlay
 	cm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("P")})
@@ -186,6 +189,7 @@ func TestChatModelCompactionWarningBanner(t *testing.T) {
 	}
 
 	cm := NewChatModel(svc, nil, nil, nil, nil, nil)
+	cm.state = chatStateIdle
 	cm.contextUsed = 900
 	cm.contextTotal = 1000
 	cm.warnCompact = true
@@ -213,11 +217,165 @@ func TestZeroEmojisInChatView(t *testing.T) {
 	}
 
 	cm := NewChatModel(svc, nil, nil, nil, nil, nil)
+	cm.state = chatStateIdle
 	view := cm.View(120, 35)
 
 	for _, r := range view {
 		if (r >= 0x1F300 && r <= 0x1FAFF) || (r >= 0x2700 && r <= 0x27BF) {
 			t.Errorf("found emoji character %q (%U) in Chat view", string(r), r)
 		}
+	}
+}
+
+type mockChatRuntime struct {
+	status    runner.ServerStatus
+	modelPath string
+	port      int
+	instances []runner.InstanceInfo
+}
+
+func (m *mockChatRuntime) Start(modelPath string, opts runner.StartOptions) error { return nil }
+func (m *mockChatRuntime) Stop() error                                           { return nil }
+func (m *mockChatRuntime) StopInstance(port int) error                           { return nil }
+func (m *mockChatRuntime) GetStatus() (runner.ServerStatus, string, int) {
+	return m.status, m.modelPath, m.port
+}
+func (m *mockChatRuntime) GetAllInstances() []runner.InstanceInfo {
+	return m.instances
+}
+func (m *mockChatRuntime) Capabilities() []runner.TaskType {
+	return []runner.TaskType{runner.TaskTextGeneration}
+}
+
+func TestChatModelNoRunningServer(t *testing.T) {
+	ApplyTheme("forest")
+	svc := &mockChatService{
+		sessions: []*chat.Session{
+			{ID: "sess-1", Name: "Chat 1", Port: 50505},
+		},
+	}
+	rt := &mockChatRuntime{
+		status:    runner.StatusStopped,
+		instances: []runner.InstanceInfo{},
+	}
+
+	cm := NewChatModel(svc, rt, nil, nil, nil, nil)
+	if cm.state != chatStateNoServer {
+		t.Fatalf("expected state chatStateNoServer when 0 instances running, got %v", cm.state)
+	}
+
+	view := cm.View(100, 30)
+	if !strings.Contains(view, "No GGUF Server Running") {
+		t.Errorf("expected 'No GGUF Server Running' in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[2] Launch") {
+		t.Errorf("expected reference to '[2] Launch' in view")
+	}
+
+	// Pressing Enter should emit ChatNavigateToLaunchMsg
+	_, cmd := cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected command on Enter in chatStateNoServer")
+	}
+	msg := cmd()
+	if _, ok := msg.(ChatNavigateToLaunchMsg); !ok {
+		t.Errorf("expected ChatNavigateToLaunchMsg, got %T", msg)
+	}
+}
+
+func TestChatModelNonGGUFFilteredOut(t *testing.T) {
+	svc := &mockChatService{
+		sessions: []*chat.Session{
+			{ID: "sess-1", Name: "Chat 1", Port: 50505},
+		},
+	}
+	// ONNX model running (not GGUF)
+	rt := &mockChatRuntime{
+		status:    runner.StatusRunning,
+		modelPath: "models/bge-large.onnx",
+		port:      50505,
+		instances: []runner.InstanceInfo{
+			{Port: 50505, ModelPath: "models/bge-large.onnx"},
+		},
+	}
+
+	cm := NewChatModel(svc, rt, nil, nil, nil, nil)
+	if cm.state != chatStateNoServer {
+		t.Fatalf("expected state chatStateNoServer when only ONNX model is running, got %v", cm.state)
+	}
+}
+
+func TestChatModelSingleGGUFServerAutoConnect(t *testing.T) {
+	svc := &mockChatService{
+		sessions: []*chat.Session{
+			{ID: "sess-1", Name: "Chat 1", Port: 0},
+		},
+	}
+	rt := &mockChatRuntime{
+		status:    runner.StatusRunning,
+		modelPath: "models/llama-3.1-8b.gguf",
+		port:      50505,
+		instances: []runner.InstanceInfo{
+			{Port: 50505, ModelPath: "models/llama-3.1-8b.gguf"},
+		},
+	}
+
+	cm := NewChatModel(svc, rt, nil, nil, nil, nil)
+	if cm.state != chatStateIdle {
+		t.Fatalf("expected state chatStateIdle when 1 GGUF server is running, got %v", cm.state)
+	}
+	if cm.activeSession.Port != 50505 || cm.activeSession.ModelPath != "models/llama-3.1-8b.gguf" {
+		t.Errorf("expected session auto-bound to 50505 and models/llama-3.1-8b.gguf, got port %d, path %s",
+			cm.activeSession.Port, cm.activeSession.ModelPath)
+	}
+}
+
+func TestChatModelMultipleGGUFServersSelect(t *testing.T) {
+	svc := &mockChatService{
+		sessions: []*chat.Session{
+			{ID: "sess-1", Name: "Chat 1", Port: 0},
+		},
+	}
+	rt := &mockChatRuntime{
+		status: runner.StatusRunning,
+		instances: []runner.InstanceInfo{
+			{Port: 50505, ModelPath: "models/llama-3.1-8b.gguf"},
+			{Port: 50506, ModelPath: "models/qwen-2.5-7b.gguf"},
+		},
+	}
+
+	cm := NewChatModel(svc, rt, nil, nil, nil, nil)
+	if cm.state != chatStateInstanceSelect {
+		t.Fatalf("expected state chatStateInstanceSelect when multiple GGUF servers running, got %v", cm.state)
+	}
+
+	view := cm.View(100, 30)
+	if !strings.Contains(view, "Multiple GGUF Servers Running") {
+		t.Errorf("expected 'Multiple GGUF Servers Running' in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "llama-3.1-8b.gguf") || !strings.Contains(view, "qwen-2.5-7b.gguf") {
+		t.Errorf("expected both models listed in view")
+	}
+
+	// Press Down to select second model (qwen)
+	cm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if cm.instanceCursor != 1 {
+		t.Fatalf("expected instanceCursor 1, got %d", cm.instanceCursor)
+	}
+
+	// Press Enter to connect
+	cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cm.state != chatStateIdle {
+		t.Fatalf("expected state chatStateIdle after selection, got %v", cm.state)
+	}
+	if cm.activeSession.Port != 50506 || cm.activeSession.ModelPath != "models/qwen-2.5-7b.gguf" {
+		t.Errorf("expected session bound to qwen on port 50506, got port %d, path %s",
+			cm.activeSession.Port, cm.activeSession.ModelPath)
+	}
+
+	// Press M to switch models
+	cm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("M")})
+	if cm.state != chatStateInstanceSelect {
+		t.Fatalf("expected state chatStateInstanceSelect after pressing M, got %v", cm.state)
 	}
 }
