@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,6 +21,7 @@ import (
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type ServerUIStatus int
@@ -113,6 +115,7 @@ type BrowserModel struct {
 	toasts                *ToastManager
 	themePicker           *ThemePickerModel
 	themePickerActive     bool
+	mouseReg              *mouse.Registry
 }
 
 func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel {
@@ -196,6 +199,7 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 		onboardingBackends:     backends,
 		llamaCPPMissingActive: llamaCPPMissing && flag.Lookup("test.v") == nil,
 		toasts:                NewToastManager(),
+		mouseReg:              mouse.NewRegistry(),
 	}
 }
 
@@ -527,6 +531,17 @@ func (m *BrowserModel) Init() tea.Cmd {
 
 func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// 0. Global Mouse Event Dispatch
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if m.mouseReg != nil {
+			cmd := m.mouseReg.Dispatch(mouseMsg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return m, tea.Batch(cmds...)
+	}
 
 	if m.onboardingActive {
 		// StepTokens has interactive text inputs for GitHub and Hugging Face tokens
@@ -1690,6 +1705,22 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 		panelHeight = 10
 	}
 
+	if m.mouseReg != nil {
+		m.mouseReg.Register(mouse.Region{
+			ID:     "models-left-card",
+			Bounds: mouse.Rect{X: 0, Y: 3, W: leftWidth, H: panelHeight},
+			ZIndex: 0,
+			OnScroll: func(up bool) tea.Cmd {
+				if up {
+					m.moveSelection(-1)
+				} else {
+					m.moveSelection(1)
+				}
+				return nil
+			},
+		})
+	}
+
 	var leftSb strings.Builder
 	if len(m.sidebarItems) == 0 {
 		leftSb.WriteString("  No models found.")
@@ -1711,6 +1742,29 @@ func (m *BrowserModel) modelBrowserView(totalWidth int, panelHeight int) string 
 
 		for idx := m.scrollOffset; idx < end; idx++ {
 			item := m.sidebarItems[idx]
+			rowY := 4 + (idx - m.scrollOffset)
+			targetIdx := idx
+
+			if m.mouseReg != nil {
+				m.mouseReg.Register(mouse.Region{
+					ID:     fmt.Sprintf("models-row-%d", targetIdx),
+					Bounds: mouse.Rect{X: 0, Y: rowY, W: leftWidth, H: 1},
+					ZIndex: 1,
+					OnClick: func(msg tea.MouseMsg) tea.Cmd {
+						m.selected = targetIdx
+						m.focusRight = false
+						return nil
+					},
+					OnDblClick: func(msg tea.MouseMsg) tea.Cmd {
+						m.selected = targetIdx
+						m.focusRight = false
+						if targetIdx >= 0 && targetIdx < len(m.sidebarItems) && m.sidebarItems[targetIdx].Type == ItemModelEntry {
+							return m.navigateToScreen(ScreenDashboard)
+						}
+						return nil
+					},
+				})
+			}
 
 			if item.Type == ItemSectionHeader {
 				leftSb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(fmt.Sprintf(" %s", item.Label)) + "\n")
@@ -2145,6 +2199,10 @@ func (m *BrowserModel) renderFooter(width int) string {
 }
 
 func (m *BrowserModel) View() string {
+	if m.mouseReg != nil {
+		m.mouseReg.Clear()
+	}
+
 	if m.loading {
 		return "\n  Scanning models directory... Please wait."
 	}
@@ -2161,6 +2219,45 @@ func (m *BrowserModel) View() string {
 	}
 	if m.themePickerActive && m.themePicker != nil {
 		pickerView := m.themePicker.View(m.width, m.height)
+		if m.mouseReg != nil {
+			modalW := 60
+			modalH := 18
+			modalX := (m.width - modalW) / 2
+			modalY := (m.height - modalH) / 2
+			if modalX < 0 {
+				modalX = 0
+			}
+			if modalY < 0 {
+				modalY = 0
+			}
+			m.mouseReg.SetModal(mouse.Rect{X: modalX, Y: modalY, W: modalW, H: modalH}, func() tea.Cmd {
+				m.themePickerActive = false
+				ApplyTheme(m.themePicker.originalThemeID)
+				return nil
+			})
+			for i, t := range m.themePicker.themes {
+				themeID := t.ID()
+				idx := i
+				m.mouseReg.Register(mouse.Region{
+					ID:     "theme-item-" + themeID,
+					Bounds: mouse.Rect{X: modalX + 4, Y: modalY + 3 + i, W: modalW - 8, H: 1},
+					ZIndex: 10,
+					OnClick: func(msg tea.MouseMsg) tea.Cmd {
+						m.themePicker.activeIdx = idx
+						ApplyTheme(themeID)
+						return nil
+					},
+					OnDblClick: func(msg tea.MouseMsg) tea.Cmd {
+						m.themePicker.activeIdx = idx
+						ApplyTheme(themeID)
+						m.config.Theme = themeID
+						_ = m.config.Save()
+						m.themePickerActive = false
+						return nil
+					},
+				})
+			}
+		}
 		baseView := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, pickerView)
 		if m.toasts != nil && m.toasts.Active() {
 			return m.toasts.Overlay(baseView, m.width, m.height)
@@ -2179,7 +2276,7 @@ func (m *BrowserModel) View() string {
 
 	runningCount := m.getRunningCount()
 	vramGauge := m.getVRAMGauge()
-	header := GlobalTabHeader(m.screenMode, totalWidth, runningCount, vramGauge)
+	header := GlobalTabHeaderWithRegistry(m.screenMode, totalWidth, runningCount, vramGauge, m.navigateToScreen, m.mouseReg)
 
 	headerHeight := lipgloss.Height(header)
 	footerHeight := 1
@@ -2192,7 +2289,47 @@ func (m *BrowserModel) View() string {
 	switch m.screenMode {
 	case ScreenDashboard:
 		if m.dashboard != nil {
-			bodyView = m.dashboard.View(totalWidth, bodyHeight)
+			bodyView = m.dashboard.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg, func() tea.Cmd {
+				if m.dashboard.Model != nil {
+					p := m.dashboard.ActiveProfile()
+					if p != nil {
+						m.serverUIStatus = UIStatusStarting
+						m.serverErr = nil
+						m.runningModelPath = m.dashboard.Model.FilePath
+						launchPort := findAvailablePort(p.Port, m.srvRunner, m.dashboard.Model.FilePath)
+						_ = m.srvRunner.StopInstance(launchPort)
+
+						var taskType runner.TaskType
+						if m.dashboard.Model != nil {
+							taskType = runner.TaskType(m.dashboard.Model.Task)
+						}
+						return startServerCmd(
+							m.srvRunner,
+							m.config.Paths.LlamaCPP,
+							m.dashboard.Model.FilePath,
+							p.Context,
+							p.Threads,
+							p.GPULayers,
+							p.BatchSize,
+							p.Host,
+							launchPort,
+							taskType,
+							p.FlashAttention,
+							p.CacheTypeK,
+							p.CacheTypeV,
+							p.CustomArgs,
+						)
+					}
+				}
+				return nil
+			}, func() tea.Cmd {
+				cmd := m.dashboard.GetLaunchCommand()
+				_ = clipboard.WriteAll(cmd)
+				if m.toasts != nil {
+					return m.toasts.Add("Command copied to clipboard", ToastInfo, 2*time.Second)
+				}
+				return nil
+			})
 		} else {
 			bodyView = "\n  No model selected. Press [1] to browse models."
 		}
@@ -2210,31 +2347,74 @@ func (m *BrowserModel) View() string {
 		}
 	case ScreenServerMonitor:
 		if m.monitorModel != nil {
-			bodyView = m.monitorModel.View(totalWidth, bodyHeight)
+			bodyView = m.monitorModel.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg, func() tea.Cmd {
+				if len(m.monitorModel.instances) > 0 && m.monitorModel.selected >= 0 && m.monitorModel.selected < len(m.monitorModel.instances) {
+					inst := m.monitorModel.instances[m.monitorModel.selected]
+					opts := m.monitorModel.resolveStartOptions(inst)
+					_ = m.srvRunner.StopInstance(inst.Port)
+					return startServerCmd(m.srvRunner, opts.LlamaCppDir, inst.ModelPath, opts.ContextSize, opts.Threads, opts.GPULayers, opts.BatchSize, opts.Host, inst.Port, opts.Task, opts.FlashAttention, opts.CacheTypeK, opts.CacheTypeV, opts.CustomArgs)
+				}
+				return nil
+			}, func() tea.Cmd {
+				if len(m.monitorModel.instances) > 0 && m.monitorModel.selected >= 0 && m.monitorModel.selected < len(m.monitorModel.instances) {
+					inst := m.monitorModel.instances[m.monitorModel.selected]
+					_ = m.srvRunner.StopInstance(inst.Port)
+					m.monitorModel.Refresh()
+				}
+				return nil
+			}, func() tea.Cmd {
+				_ = m.srvRunner.Stop()
+				m.monitorModel.Refresh()
+				return nil
+			}, func() tea.Cmd {
+				if len(m.monitorModel.instances) > 0 && m.monitorModel.selected >= 0 && m.monitorModel.selected < len(m.monitorModel.instances) {
+					port := m.monitorModel.instances[m.monitorModel.selected].Port
+					m.logStreamerModel = NewLogStreamerModel(m.srvRunner, ScreenServerMonitor, port)
+					m.screenMode = ScreenLogStreamer
+					return m.logStreamerModel.Init()
+				}
+				return nil
+			})
 		} else {
 			bodyView = "\n  Server monitor unavailable."
 		}
 	case ScreenSettings:
 		if m.lifecycleModel != nil {
-			bodyView = m.lifecycleModel.View(totalWidth, bodyHeight)
+			bodyView = m.lifecycleModel.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg)
 		} else {
 			bodyView = "\n  Settings unavailable."
 		}
 	case ScreenDownloader:
 		if m.downloaderModel != nil {
-			bodyView = m.downloaderModel.View(totalWidth, bodyHeight)
+			bodyView = m.downloaderModel.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg)
 		} else {
 			bodyView = "\n  Downloader unavailable."
 		}
 	case ScreenProfileCreator:
 		if m.profileCreatorModel != nil {
-			bodyView = m.profileCreatorModel.View(totalWidth, bodyHeight)
+			bodyView = m.profileCreatorModel.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg, func() tea.Cmd {
+				_, err := m.profileCreatorModel.Save()
+				if err != nil {
+					if m.toasts != nil {
+						return m.toasts.Add(err.Error(), ToastDanger, 3*time.Second)
+					}
+					return nil
+				}
+				m.screenMode = ScreenDashboard
+				if m.toasts != nil {
+					return m.toasts.Add("Profile saved successfully", ToastSuccess, 2*time.Second)
+				}
+				return nil
+			}, func() tea.Cmd {
+				m.screenMode = ScreenDashboard
+				return nil
+			})
 		} else {
 			bodyView = "\n  Profile creator unavailable."
 		}
 	case ScreenLogStreamer:
 		if m.logStreamerModel != nil {
-			bodyView = m.logStreamerModel.View(totalWidth, bodyHeight)
+			bodyView = m.logStreamerModel.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg)
 		} else {
 			bodyView = "\n  Log streamer unavailable."
 		}

@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/runner"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type LogStreamTickMsg struct{}
@@ -423,8 +424,40 @@ func (m *LogStreamerModel) Update(msg tea.Msg) (*LogStreamerModel, tea.Cmd) {
 }
 
 func (m *LogStreamerModel) View(width, height int) string {
+	return m.ViewWithRegistry(width, height, nil)
+}
+
+func (m *LogStreamerModel) ViewWithRegistry(width, height int, reg *mouse.Registry) string {
 	m.width = width
 	m.height = height
+
+	if reg != nil {
+		reg.Register(mouse.Region{
+			ID:     "log-streamer-viewport",
+			Bounds: mouse.Rect{X: 0, Y: 0, W: width, H: height},
+			ZIndex: 0,
+			OnScroll: func(up bool) tea.Cmd {
+				if up {
+					m.scrollOffset -= 3
+					if m.scrollOffset < 0 {
+						m.scrollOffset = 0
+					}
+					m.autoScroll = false
+				} else {
+					m.scrollOffset += 3
+					maxScroll := len(m.getFilteredLines()) - m.getViewportHeight()
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					if m.scrollOffset >= maxScroll {
+						m.scrollOffset = maxScroll
+						m.autoScroll = true
+					}
+				}
+				return nil
+			},
+		})
+	}
 
 	boxWidth := width - 4
 	if boxWidth < 60 {

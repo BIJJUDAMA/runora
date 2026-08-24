@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 // ThemePalette defines semantic color tokens (analogous to CSS variables in a global stylesheet).
@@ -854,6 +856,11 @@ func SurfaceCard(title string, content string, width int, active bool, badge str
 
 // GlobalTabHeader renders the standardized top navigation bar across all screens.
 func GlobalTabHeader(activeScreen ScreenMode, width int, runningCount int, vramGauge string) string {
+	return GlobalTabHeaderWithRegistry(activeScreen, width, runningCount, vramGauge, nil, nil)
+}
+
+// GlobalTabHeaderWithRegistry renders the standardized top navigation bar and registers clickable tab regions.
+func GlobalTabHeaderWithRegistry(activeScreen ScreenMode, width int, runningCount int, vramGauge string, onTabClick func(ScreenMode) tea.Cmd, reg *mouse.Registry) string {
 	var activeIndex int = -1
 	switch activeScreen {
 	case ScreenBrowser:
@@ -876,15 +883,17 @@ func GlobalTabHeader(activeScreen ScreenMode, width int, runningCount int, vramG
 	}
 
 	tabs := []struct {
-		index int
-		label string
+		index  int
+		screen ScreenMode
+		label  string
+		id     string
 	}{
-		{0, "[1] Models"},
-		{1, "[2] Launch"},
-		{2, tab3Label},
-		{3, "[4] Downloads"},
-		{4, "[5] Bench"},
-		{5, "[6] Settings"},
+		{0, ScreenBrowser, "[1] Models", "tab-browser"},
+		{1, ScreenDashboard, "[2] Launch", "tab-dashboard"},
+		{2, ScreenServerMonitor, tab3Label, "tab-monitor"},
+		{3, ScreenDownloader, "[4] Downloads", "tab-downloader"},
+		{4, ScreenPerformanceDashboard, "[5] Bench", "tab-benchmark"},
+		{5, ScreenSettings, "[6] Settings", "tab-settings"},
 	}
 
 	activeBg := ColorSelected
@@ -918,6 +927,25 @@ func GlobalTabHeader(activeScreen ScreenMode, width int, runningCount int, vramG
 				Foreground(textMuted).
 				Padding(0, 1)
 			renderedTabs = append(renderedTabs, tabStyle.Render(tab.label))
+		}
+	}
+
+	// Register clickable tab regions if registry is provided
+	if reg != nil && onTabClick != nil {
+		curX := 2
+		for i, tab := range tabs {
+			rendered := renderedTabs[i]
+			tabW := lipgloss.Width(rendered)
+			targetScreen := tab.screen
+			reg.Register(mouse.Region{
+				ID:     tab.id,
+				Bounds: mouse.Rect{X: curX, Y: 2, W: tabW, H: 1},
+				ZIndex: 0,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd {
+					return onTabClick(targetScreen)
+				},
+			})
+			curX += tabW + 1 // +1 for sep "│"
 		}
 	}
 

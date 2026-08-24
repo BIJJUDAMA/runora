@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/model"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type DownloaderFocus int
@@ -401,6 +402,10 @@ func (m *DownloaderModel) moveCursor(dir int) {
 }
 
 func (m *DownloaderModel) View(width int, height int) string {
+	return m.ViewWithRegistry(width, height, nil)
+}
+
+func (m *DownloaderModel) ViewWithRegistry(width int, height int, reg *mouse.Registry) string {
 	// Top Bento Card: Direct Model Download
 	var inputSb strings.Builder
 
@@ -419,6 +424,31 @@ func (m *DownloaderModel) View(width int, height int) string {
 	inputSb.WriteString("  " + m.urlInput.View() + "\n")
 	inputSb.WriteString("  " + fileStyle.Render(fileLabel) + "\n")
 	inputSb.WriteString("  " + m.filenameInput.View() + "\n\n")
+
+	if reg != nil {
+		reg.Register(mouse.Region{
+			ID:     "downloader-url-input",
+			Bounds: mouse.Rect{X: 2, Y: 5, W: max(20, width-4), H: 1},
+			ZIndex: 1,
+			OnClick: func(msg tea.MouseMsg) tea.Cmd {
+				m.focus = FocusURL
+				m.urlInput.Focus()
+				m.filenameInput.Blur()
+				return nil
+			},
+		})
+		reg.Register(mouse.Region{
+			ID:     "downloader-filename-input",
+			Bounds: mouse.Rect{X: 2, Y: 7, W: max(20, width-4), H: 1},
+			ZIndex: 1,
+			OnClick: func(msg tea.MouseMsg) tea.Cmd {
+				m.focus = FocusFilename
+				m.filenameInput.Focus()
+				m.urlInput.Blur()
+				return nil
+			},
+		})
+	}
 
 	var tokenBadge string
 	hfToken := ""

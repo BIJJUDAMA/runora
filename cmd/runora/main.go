@@ -204,7 +204,11 @@ func main() {
 
 	m := ui.NewBrowserModel(cfg, srv)
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(
+		m,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Error running program: %v", err)
 	}

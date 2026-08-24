@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/profile"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type ProfileCreatorMode int
@@ -221,81 +222,93 @@ func (pc *ProfileCreatorModel) Update(msg tea.Msg) (tea.Cmd, bool, bool) {
 				return nil, false, false
 			}
 
-			name := strings.TrimSpace(pc.nameInput.Value())
-			if name == "" || profile.IsReservedWindowsName(name) {
+			_, err := pc.Save()
+			if err != nil {
 				return nil, false, false
 			}
-
-			// Parse values with default fallbacks
-			ctxVal := uint32(2048)
-			if c, err := strconv.ParseUint(strings.TrimSpace(pc.ctxInput.Value()), 10, 32); err == nil && c >= 256 {
-				ctxVal = uint32(c)
-			}
-
-			threads := runtime.NumCPU() / 2
-			if threads < 1 {
-				threads = 1
-			}
-			if t, err := strconv.Atoi(strings.TrimSpace(pc.threadsInput.Value())); err == nil && t >= 1 {
-				threads = t
-			}
-
-			gpuVal := 999
-			if g, err := strconv.Atoi(strings.TrimSpace(pc.gpuInput.Value())); err == nil && g >= 0 && g <= 999 {
-				gpuVal = g
-			}
-
-			portVal := 50505
-			if p, err := strconv.Atoi(strings.TrimSpace(pc.portInput.Value())); err == nil && p >= 1024 && p <= 65535 {
-				portVal = p
-			}
-
-			kQuant := ""
-			vQuant := ""
-			switch kvQuantOptions[pc.kvQuantIdx] {
-			case "Q8_0":
-				kQuant = "q8_0"
-				vQuant = "q8_0"
-			case "Q4_0":
-				kQuant = "q4_0"
-				vQuant = "q4_0"
-			case "FP8":
-				kQuant = "fp8"
-				vQuant = "fp8"
-			}
-
-			newProfile := &profile.Profile{
-				Name:           name,
-				Context:        ctxVal,
-				Threads:        threads,
-				GPULayers:      gpuVal,
-				BatchSize:      512,
-				Host:           "127.0.0.1",
-				Port:           portVal,
-				FlashAttention: pc.flashAttn,
-				CacheTypeK:     kQuant,
-				CacheTypeV:     vQuant,
-				CustomArgs:     strings.TrimSpace(pc.customArgsInput.Value()),
-			}
-
-			if err := newProfile.Validate(); err != nil {
-				return nil, false, false
-			}
-
-			// If editing and name changed, remove old profile
-			if pc.mode == ModeEdit && pc.origName != "" && pc.origName != name {
-				_ = profile.DeleteProfile(pc.profilesDir, pc.origName)
-			}
-
-			if err := profile.SaveProfile(pc.profilesDir, newProfile); err != nil {
-				return nil, false, false
-			}
-
 			return nil, true, true
 		}
 	}
 
 	return cmd, false, false
+}
+
+// Save validates and persists the profile to disk.
+func (pc *ProfileCreatorModel) Save() (*profile.Profile, error) {
+	name := strings.TrimSpace(pc.nameInput.Value())
+	if name == "" {
+		return nil, fmt.Errorf("profile name cannot be empty")
+	}
+	if profile.IsReservedWindowsName(name) {
+		return nil, fmt.Errorf("profile name cannot be a reserved Windows device name")
+	}
+
+	// Parse values with default fallbacks
+	ctxVal := uint32(2048)
+	if c, err := strconv.ParseUint(strings.TrimSpace(pc.ctxInput.Value()), 10, 32); err == nil && c >= 256 {
+		ctxVal = uint32(c)
+	}
+
+	threads := runtime.NumCPU() / 2
+	if threads < 1 {
+		threads = 1
+	}
+	if t, err := strconv.Atoi(strings.TrimSpace(pc.threadsInput.Value())); err == nil && t >= 1 {
+		threads = t
+	}
+
+	gpuVal := 999
+	if g, err := strconv.Atoi(strings.TrimSpace(pc.gpuInput.Value())); err == nil && g >= 0 && g <= 999 {
+		gpuVal = g
+	}
+
+	portVal := 50505
+	if p, err := strconv.Atoi(strings.TrimSpace(pc.portInput.Value())); err == nil && p >= 1024 && p <= 65535 {
+		portVal = p
+	}
+
+	kQuant := ""
+	vQuant := ""
+	switch kvQuantOptions[pc.kvQuantIdx] {
+	case "Q8_0":
+		kQuant = "q8_0"
+		vQuant = "q8_0"
+	case "Q4_0":
+		kQuant = "q4_0"
+		vQuant = "q4_0"
+	case "FP8":
+		kQuant = "fp8"
+		vQuant = "fp8"
+	}
+
+	newProfile := &profile.Profile{
+		Name:           name,
+		Context:        ctxVal,
+		Threads:        threads,
+		GPULayers:      gpuVal,
+		BatchSize:      512,
+		Host:           "127.0.0.1",
+		Port:           portVal,
+		FlashAttention: pc.flashAttn,
+		CacheTypeK:     kQuant,
+		CacheTypeV:     vQuant,
+		CustomArgs:     strings.TrimSpace(pc.customArgsInput.Value()),
+	}
+
+	if err := newProfile.Validate(); err != nil {
+		return nil, err
+	}
+
+	// If editing and name changed, remove old profile
+	if pc.mode == ModeEdit && pc.origName != "" && pc.origName != name {
+		_ = profile.DeleteProfile(pc.profilesDir, pc.origName)
+	}
+
+	if err := profile.SaveProfile(pc.profilesDir, newProfile); err != nil {
+		return nil, err
+	}
+
+	return newProfile, nil
 }
 
 func (pc *ProfileCreatorModel) updateFocus() {
@@ -323,6 +336,10 @@ func (pc *ProfileCreatorModel) updateFocus() {
 }
 
 func (pc *ProfileCreatorModel) View(width int, height int) string {
+	return pc.ViewWithRegistry(width, height, nil, nil, nil)
+}
+
+func (pc *ProfileCreatorModel) ViewWithRegistry(width int, height int, reg *mouse.Registry, onSave func() tea.Cmd, onCancel func() tea.Cmd) string {
 	var sb strings.Builder
 
 	labels := []string{
@@ -389,6 +406,44 @@ func (pc *ProfileCreatorModel) View(width int, height int) string {
 		StyleHelpKey.Render("[Tab/Shift+Tab]"),
 		StyleHelpKey.Render("[Esc]"),
 	))
+
+	if reg != nil {
+		fieldPositions := []int{4, 6, 8, 10, 12, 14, 16, 18}
+		for i, rowY := range fieldPositions {
+			fieldIdx := i
+			reg.Register(mouse.Region{
+				ID:     fmt.Sprintf("profile-field-%d", fieldIdx),
+				Bounds: mouse.Rect{X: 2, Y: rowY, W: max(20, width-4), H: 2},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd {
+					pc.focusIndex = fieldIdx
+					if fieldIdx == 5 {
+						pc.flashAttn = !pc.flashAttn
+					} else if fieldIdx == 6 {
+						pc.kvQuantIdx = (pc.kvQuantIdx + 1) % len(kvQuantOptions)
+					}
+					pc.updateFocus()
+					return nil
+				},
+			})
+		}
+		if onSave != nil {
+			reg.Register(mouse.Region{
+				ID:     "profile-btn-save",
+				Bounds: mouse.Rect{X: 4, Y: 21, W: 16, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd { return onSave() },
+			})
+		}
+		if onCancel != nil {
+			reg.Register(mouse.Region{
+				ID:     "profile-btn-cancel",
+				Bounds: mouse.Rect{X: 36, Y: 21, W: 12, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd { return onCancel() },
+			})
+		}
+	}
 
 	var title string
 	switch pc.mode {

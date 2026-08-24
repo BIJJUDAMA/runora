@@ -1,8 +1,8 @@
 # Binaries and build artifacts
-llama-manager
-llama-manager.exe
-runora
-runora.exe
+/llama-manager
+/llama-manager.exe
+/runora
+/runora.exe
 *.exe
 *.dll
 *.ps1

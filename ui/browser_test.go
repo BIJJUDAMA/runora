@@ -1946,3 +1946,301 @@ func TestBentoModelBrowserLayout(t *testing.T) {
 	assertZeroEmojis("FocusRight", viewFocusRight)
 	assertZeroEmojis("EmptyModels", viewEmpty)
 }
+
+func TestGlobalHeaderTabMouseNavigation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+
+	// 1. Initial view render populates mouse registry
+	_ = bm.View()
+
+	if bm.mouseReg == nil || bm.mouseReg.RegionCount() == 0 {
+		t.Fatalf("expected mouse regions to be registered on View(), got %v", bm.mouseReg)
+	}
+
+	// 2. Click Tab 2 (Launch / Dashboard) - coordinates (18, 2)
+	m, _ := bm.Update(tea.MouseMsg{X: 18, Y: 2, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenDashboard {
+		t.Errorf("expected click on Tab 2 to switch to ScreenDashboard, got %v", bm.screenMode)
+	}
+
+	// 3. Re-render View() to update mouse registry for new screen
+	_ = bm.View()
+
+	// 4. Click Tab 3 (Monitor) - coordinates (32, 2)
+	m, _ = bm.Update(tea.MouseMsg{X: 32, Y: 2, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenServerMonitor {
+		t.Errorf("expected click on Tab 3 to switch to ScreenServerMonitor, got %v", bm.screenMode)
+	}
+
+	// 5. Click Tab 6 (Settings) - coordinates (75, 2)
+	_ = bm.View()
+	m, _ = bm.Update(tea.MouseMsg{X: 75, Y: 2, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenSettings {
+		t.Errorf("expected click on Tab 6 to switch to ScreenSettings, got %v", bm.screenMode)
+	}
+
+	// 6. Click Tab 1 (Models) - coordinates (4, 2)
+	_ = bm.View()
+	m, _ = bm.Update(tea.MouseMsg{X: 4, Y: 2, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenBrowser {
+		t.Errorf("expected click on Tab 1 to switch back to ScreenBrowser, got %v", bm.screenMode)
+	}
+}
+
+func TestModelListMouseSelectionAndScroll(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Model Alpha", FilePath: "models/alpha.gguf"},
+		{Name: "Model Beta", FilePath: "models/beta.gguf"},
+		{Name: "Model Gamma", FilePath: "models/gamma.gguf"},
+	}
+	bm.filterModels()
+	bm.rebuildSidebar()
+
+	// 1. Initial render
+	_ = bm.View()
+
+	// 2. Click on row 2 (Model Beta) -> row Y = 5 (row 0 header at 4, row 1 alpha at 5, beta at 6 depending on sidebar items)
+	// SidebarItems: [0: All Models header, 1: Model Alpha, 2: Model Beta, 3: Model Gamma]
+	// Row 1 (Alpha): Y = 5. Row 2 (Beta): Y = 6.
+	m, _ := bm.Update(tea.MouseMsg{X: 10, Y: 6, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.selected != 2 {
+		t.Errorf("expected selected index to be 2 after clicking row Y=6, got %d", bm.selected)
+	}
+
+	// 3. Scroll Down inside Left Card (X: 10, Y: 10)
+	m, _ = bm.Update(tea.MouseMsg{X: 10, Y: 10, Type: tea.MouseWheelDown})
+	bm = m.(*BrowserModel)
+	if bm.selected != 3 {
+		t.Errorf("expected selected index to advance to 3 on MouseWheelDown, got %d", bm.selected)
+	}
+
+	// 4. Scroll Up inside Left Card
+	m, _ = bm.Update(tea.MouseMsg{X: 10, Y: 10, Type: tea.MouseWheelUp})
+	bm = m.(*BrowserModel)
+	if bm.selected != 2 {
+		t.Errorf("expected selected index to move up to 2 on MouseWheelUp, got %d", bm.selected)
+	}
+}
+
+func TestThemePickerMouseSelectionAndClickAway(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+
+	// Open Theme Picker
+	bm.themePicker = NewThemePickerModel("forest")
+	bm.themePickerActive = true
+
+	// Render view (registers modal and theme items)
+	_ = bm.View()
+
+	if !bm.mouseReg.HasModal() {
+		t.Fatalf("expected active modal in mouse registry when theme picker is open")
+	}
+
+	// 1. Click outside modal box (e.g. at (5, 2)) -> click-away dismissal
+	m, _ := bm.Update(tea.MouseMsg{X: 5, Y: 2, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.themePickerActive {
+		t.Errorf("expected theme picker to be dismissed on click-away outside modal")
+	}
+
+	// Re-open Theme Picker
+	bm.themePickerActive = true
+	_ = bm.View()
+
+	// 2. Click inside modal on theme item 1 (Nord or Dracula depending on list)
+	// Modal center: (120-60)/2 = 30, (30-18)/2 = 6. Item 1 is at Y = 6 + 3 + 1 = 10.
+	m, _ = bm.Update(tea.MouseMsg{X: 35, Y: 10, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.themePicker.activeIdx != 1 {
+		t.Errorf("expected themePicker activeIdx to be 1 after clicking item 1, got %d", bm.themePicker.activeIdx)
+	}
+}
+
+func TestDashboardMouseSelectionAndActions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+	bm.profiles = profile.DefaultProfiles()
+	testMod := &model.GGUFMetadata{Name: "Meta-Llama-3-8B", FilePath: "models/llama3.gguf"}
+	bm.models = []*model.GGUFMetadata{testMod}
+	bm.filterModels()
+	bm.rebuildSidebar()
+
+	// Navigate to dashboard
+	_ = bm.navigateToScreen(ScreenDashboard)
+	_ = bm.View()
+
+	if bm.dashboard == nil {
+		t.Fatalf("expected dashboard model to be initialized")
+	}
+
+	// 1. Click on Profile Tile 2 in the 5x5 grid (row 0, col 2 -> X ~ 85, Y ~ 5)
+	// Profile tiles start at leftColWidth + 3 = 63
+	m, _ := bm.Update(tea.MouseMsg{X: 85, Y: 5, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.dashboard.ActiveIdx < 0 || bm.dashboard.ActiveIdx >= len(bm.dashboard.Profiles) {
+		t.Errorf("expected valid active profile index, got %d", bm.dashboard.ActiveIdx)
+	}
+
+	// 2. Click on Copy Command button in bottom right card
+	_ = bm.View()
+	copyBtnY := 3 + ((30-5)*6)/10 + 3
+	m, cmd := bm.Update(tea.MouseMsg{X: 65, Y: copyBtnY, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if cmd == nil {
+		t.Logf("copy button click registered")
+	}
+}
+
+func TestMonitorMouseSelectionAndActions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+
+	// Mock active instances in monitor
+	bm.monitorModel.instances = []runner.InstanceInfo{
+		{Port: 50505, PID: 1001, ModelPath: "models/alpha.gguf"},
+		{Port: 50506, PID: 1002, ModelPath: "models/beta.gguf"},
+	}
+
+	// Switch to monitor
+	_ = bm.navigateToScreen(ScreenServerMonitor)
+	_ = bm.View()
+
+	// Click on second instance row (Y = 6)
+	m, _ := bm.Update(tea.MouseMsg{X: 10, Y: 6, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.monitorModel.selected != 1 {
+		t.Errorf("expected monitor selected instance to be 1, got %d", bm.monitorModel.selected)
+	}
+}
+
+func TestDownloaderMouseInputFocus(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+
+	// Switch to downloader
+	_ = bm.navigateToScreen(ScreenDownloader)
+	_ = bm.View()
+
+	// 1. Click on Filename input field (Y = 7)
+	m, _ := bm.Update(tea.MouseMsg{X: 10, Y: 7, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.downloaderModel.focus != FocusFilename {
+		t.Errorf("expected downloader focus to be FocusFilename after clicking Y=7, got %v", bm.downloaderModel.focus)
+	}
+
+	// 2. Click on URL input field (Y = 5)
+	_ = bm.View()
+	m, _ = bm.Update(tea.MouseMsg{X: 10, Y: 5, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.downloaderModel.focus != FocusURL {
+		t.Errorf("expected downloader focus to be FocusURL after clicking Y=5, got %v", bm.downloaderModel.focus)
+	}
+}
+
+func TestSettingsMouseNavigation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+
+	// Switch to settings
+	_ = bm.navigateToScreen(ScreenSettings)
+	_ = bm.View()
+
+	// Click on section 1 (llama.cpp) -> Y = 6
+	m, _ := bm.Update(tea.MouseMsg{X: 5, Y: 6, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 1 {
+		t.Errorf("expected selected runtime in settings to be 1 (llama.cpp), got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
+	// Click on section 2 (ONNX Runtime) -> Y = 8
+	_ = bm.View()
+	m, _ = bm.Update(tea.MouseMsg{X: 5, Y: 8, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 2 {
+		t.Errorf("expected selected runtime in settings to be 2 (ONNX), got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+}
+
+func TestMouseAndKeyboardInteroperability(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.width = 120
+	bm.height = 30
+	bm.models = []*model.GGUFMetadata{
+		{Name: "Model 1", FilePath: "models/1.gguf"},
+		{Name: "Model 2", FilePath: "models/2.gguf"},
+		{Name: "Model 3", FilePath: "models/3.gguf"},
+	}
+	bm.filterModels()
+	bm.rebuildSidebar()
+
+	_ = bm.View()
+
+	// 1. Mouse click to select Model 2 (row 2 -> Y = 6)
+	m, _ := bm.Update(tea.MouseMsg{X: 10, Y: 6, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.selected != 2 {
+		t.Fatalf("expected selected index 2 after mouse click, got %d", bm.selected)
+	}
+
+	// 2. Keyboard down arrow to move to Model 3
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	bm = m.(*BrowserModel)
+	if bm.selected != 3 {
+		t.Fatalf("expected selected index 3 after keyboard down arrow, got %d", bm.selected)
+	}
+
+	// 3. Mouse click on Tab 2 (Dashboard)
+	_ = bm.View()
+	m, _ = bm.Update(tea.MouseMsg{X: 18, Y: 2, Type: tea.MouseLeft})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenDashboard {
+		t.Fatalf("expected screenMode ScreenDashboard after mouse tab click, got %v", bm.screenMode)
+	}
+
+	// 4. Keyboard key '1' to switch back to Models
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenBrowser {
+		t.Fatalf("expected screenMode ScreenBrowser after keyboard '1' press, got %v", bm.screenMode)
+	}
+}

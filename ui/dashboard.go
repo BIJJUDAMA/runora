@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type DashboardModel struct {
@@ -123,8 +125,14 @@ func (d *DashboardModel) CopyCommandToClipboard() error {
 }
 
 func (d *DashboardModel) View(width int, height int) string {
-	p := d.ActiveProfile()
-	if p == nil {
+	return d.ViewWithRegistry(width, height, nil, nil, nil)
+}
+
+func (d *DashboardModel) ViewWithRegistry(width int, height int, reg *mouse.Registry, onLaunch func() tea.Cmd, onCopy func() tea.Cmd) string {
+	d.Width = width
+	d.Height = height
+
+	if len(d.Profiles) == 0 {
 		return "No profiles found. Press [P] to create a profile."
 	}
 
@@ -160,6 +168,8 @@ func (d *DashboardModel) View(width int, height int) string {
 			Padding(0, 2)
 		leftContent.WriteString(fmt.Sprintf("  %s\n\n", toastStyle.Render(d.ToastMessage)))
 	}
+
+	p := d.Profiles[d.ActiveIdx]
 
 	if d.Model != nil {
 		weightStr := formatSize(d.Model.FileSize)
@@ -260,6 +270,7 @@ func (d *DashboardModel) View(width int, height int) string {
 
 	for row := 0; row < numRows; row++ {
 		var rowItems []string
+		curX := leftColWidth + 3
 		for col := 0; col < colsPerRow; col++ {
 			idx := row*colsPerRow + col
 			if idx >= totalProfiles {
@@ -271,18 +282,42 @@ func (d *DashboardModel) View(width int, height int) string {
 			if !isDefault {
 				profLabel = prof.Name + "*"
 			}
+			var renderedItem string
 			if idx == d.ActiveIdx {
-				rowItems = append(rowItems, lipgloss.NewStyle().
+				renderedItem = lipgloss.NewStyle().
 					Background(ColorPrimary).
 					Foreground(ColorTextOnAccent).
 					Bold(true).
 					Padding(0, 1).
-					Render(profLabel))
+					Render(profLabel)
 			} else {
-				rowItems = append(rowItems, lipgloss.NewStyle().
+				renderedItem = lipgloss.NewStyle().
 					Foreground(ColorMuted).
 					Padding(0, 1).
-					Render(profLabel))
+					Render(profLabel)
+			}
+			rowItems = append(rowItems, renderedItem)
+
+			if reg != nil {
+				profW := lipgloss.Width(renderedItem)
+				targetIdx := idx
+				reg.Register(mouse.Region{
+					ID:     fmt.Sprintf("profile-tile-%d", targetIdx),
+					Bounds: mouse.Rect{X: curX, Y: 5 + row, W: profW, H: 1},
+					ZIndex: 1,
+					OnClick: func(msg tea.MouseMsg) tea.Cmd {
+						d.ActiveIdx = targetIdx
+						return nil
+					},
+					OnDblClick: func(msg tea.MouseMsg) tea.Cmd {
+						d.ActiveIdx = targetIdx
+						if onLaunch != nil {
+							return onLaunch()
+						}
+						return nil
+					},
+				})
+				curX += profW + 1
 			}
 		}
 		profileContent.WriteString("  " + strings.Join(rowItems, " ") + "\n")
@@ -342,6 +377,17 @@ func (d *DashboardModel) View(width int, height int) string {
 	previewContent.WriteString(wrappedCmd)
 	previewContent.WriteString("\n\n")
 	previewContent.WriteString(fmt.Sprintf("  %s Copy to clipboard", StyleHelpKey.Render("[C]")))
+
+	if reg != nil && onCopy != nil {
+		reg.Register(mouse.Region{
+			ID:     "dashboard-btn-copy",
+			Bounds: mouse.Rect{X: leftColWidth + 3, Y: 3 + rightTopHeight + 3, W: 24, H: 1},
+			ZIndex: 1,
+			OnClick: func(msg tea.MouseMsg) tea.Cmd {
+				return onCopy()
+			},
+		})
+	}
 
 	botRightCard := SurfaceCardWithHeight("Launch Command Preview", previewContent.String(), rightColWidth, rightBotHeight, false, "CLI")
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, topRightCard, botRightCard)

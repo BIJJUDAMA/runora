@@ -182,6 +182,20 @@ Flags:
 
 ---
 
+## Mouse and Touchpad Navigation
+
+Runora supports first-class mouse and touchpad interaction alongside the keyboard workflow:
+
+- **Top Navigation Tabs**: Click any header tab (`[1] Models`, `[2] Launch`, `[3] Monitor`, `[4] Downloads`, `[5] Benchmarks`, `[6] Settings`) to switch views directly.
+- **Model Explorer**: Click any model row to select; double-click to immediately open the Launch Dashboard; use the scroll wheel to browse large model libraries.
+- **Launch Dashboard**: Click any profile card in the 5x5 Bento grid to select; double-click to immediately launch the inference server; click `[C] Copy Launch Command` to copy to clipboard.
+- **Server Monitor**: Click any active server instance to inspect runtime metrics; double-click to stream logs; click action buttons (`[R]`, `[S]`, `[Ctrl+K]`, `[L]`).
+- **Downloader**: Click URL or destination filename input fields to focus and type; click queue tasks to inspect progress.
+- **Settings & Inspector**: Click component items in the left panel to inspect details; click input fields to edit API tokens.
+- **Theme Picker & Modals**: Click themes to preview; double-click to apply and dismiss; click anywhere outside the modal dialog to dismiss.
+
+---
+
 ## Data Directory Layout
 
 Runora organizes all local state, binaries, and configurations within a clean, isolated data directory (`%LOCALAPPDATA%\runora` or `%APPDATA%\runora` on Windows, `~/.local/share/runora` on Linux, `~/Library/Application Support/runora` on macOS):

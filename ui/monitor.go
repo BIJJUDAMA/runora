@@ -12,6 +12,7 @@ import (
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type MonitorTickMsg struct{}
@@ -277,6 +278,10 @@ func (m *MonitorModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (m *MonitorModel) View(width int, height int) string {
+	return m.ViewWithRegistry(width, height, nil, nil, nil, nil, nil)
+}
+
+func (m *MonitorModel) ViewWithRegistry(width int, height int, reg *mouse.Registry, onRestart, onStop, onStopAll, onLogs func() tea.Cmd) string {
 	cardWidth := width
 	if cardWidth < 50 {
 		cardWidth = 50
@@ -347,8 +352,32 @@ func (m *MonitorModel) View(width int, height int) string {
 			inst.Port, modelName, inst.PID, uptimeStr, speedStr, statusStr,
 		)
 
+		if reg != nil {
+			targetIdx := idx
+			reg.Register(mouse.Region{
+				ID:     fmt.Sprintf("monitor-instance-%d", targetIdx),
+				Bounds: mouse.Rect{X: 2, Y: 5 + idx, W: innerWidth, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd {
+					m.selected = targetIdx
+					return nil
+				},
+				OnDblClick: func(msg tea.MouseMsg) tea.Cmd {
+					m.selected = targetIdx
+					if onLogs != nil {
+						return onLogs()
+					}
+					return nil
+				},
+			})
+		}
+
 		if idx == m.selected {
-			sumSb.WriteString(StyleSelectedListItem.Width(innerWidth).Render(row) + "\n")
+			selW := innerWidth
+			if selW > 80 {
+				selW = 80
+			}
+			sumSb.WriteString(StyleSelectedListItem.Width(selW).Render(row) + "\n")
 		} else {
 			sumSb.WriteString(row + "\n")
 		}
@@ -356,18 +385,13 @@ func (m *MonitorModel) View(width int, height int) string {
 	summaryContent = strings.TrimRight(sumSb.String(), "\n")
 	summaryCard := SurfaceCard("Active Server Instances", summaryContent, cardWidth, false, summaryBadge)
 
-	// Active selected instance resolution
-	selectedIdx := m.selected
-	if selectedIdx >= len(m.instances) {
-		selectedIdx = len(m.instances) - 1
+	// Detail view of selected instance
+	if m.selected < 0 || m.selected >= len(m.instances) {
+		m.selected = 0
 	}
-	if selectedIdx < 0 {
-		selectedIdx = 0
-	}
-	selectedInst := m.instances[selectedIdx]
-
+	selectedInst := m.instances[m.selected]
 	modelBase := filepath.Base(selectedInst.ModelPath)
-	modelBaseTrunc := TruncateVisual(modelBase, max(24, innerWidth-25), "...")
+	modelBaseTrunc := TruncateVisual(modelBase, max(24, innerWidth-22), "...")
 
 	uptimeSec := int(selectedInst.Uptime.Seconds())
 	uptimeStr := fmt.Sprintf("%dh %dm %ds", uptimeSec/3600, (uptimeSec%3600)/60, uptimeSec%60)
@@ -482,6 +506,42 @@ func (m *MonitorModel) View(width int, height int) string {
 		StyleHelpKey.Render("[Tick]"),
 	)
 	controlCard := SurfaceCard("Control Actions", helpShortcuts+"\n"+navShortcuts, cardWidth, false, "")
+
+	if reg != nil {
+		ctrlY := height - 3
+		if onRestart != nil {
+			reg.Register(mouse.Region{
+				ID:     "monitor-btn-restart",
+				Bounds: mouse.Rect{X: 4, Y: ctrlY, W: 12, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd { return onRestart() },
+			})
+		}
+		if onStop != nil {
+			reg.Register(mouse.Region{
+				ID:     "monitor-btn-stop",
+				Bounds: mouse.Rect{X: 18, Y: ctrlY, W: 10, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd { return onStop() },
+			})
+		}
+		if onStopAll != nil {
+			reg.Register(mouse.Region{
+				ID:     "monitor-btn-stopall",
+				Bounds: mouse.Rect{X: 30, Y: ctrlY, W: 14, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd { return onStopAll() },
+			})
+		}
+		if onLogs != nil {
+			reg.Register(mouse.Region{
+				ID:     "monitor-btn-logs",
+				Bounds: mouse.Rect{X: 46, Y: ctrlY, W: 16, H: 1},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd { return onLogs() },
+			})
+		}
+	}
 
 	return summaryCard + "\n" + instanceCard + "\n" + contextCard + "\n" + controlCard
 }

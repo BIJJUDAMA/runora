@@ -16,6 +16,7 @@ import (
 	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
 	"github.com/BIJJUDAMA/runora/runner"
+	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
 
 type LifecycleState int
@@ -816,6 +817,10 @@ func maskToken(token string) string {
 }
 
 func (m *LifecycleModel) View(width int, height int) string {
+	return m.ViewWithRegistry(width, height, nil)
+}
+
+func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Registry) string {
 	m.width = width
 	m.height = height
 
@@ -846,7 +851,7 @@ func (m *LifecycleModel) View(width int, height int) string {
 		{3, "Runora App"},
 	}
 
-	for _, s := range sections {
+	for i, s := range sections {
 		isSelected := m.SelectedRuntime == s.idx
 		prefix := "  "
 		if isSelected {
@@ -856,6 +861,19 @@ func (m *LifecycleModel) View(width int, height int) string {
 		nameStyle := lipgloss.NewStyle().Foreground(ColorWhite)
 		if isSelected {
 			nameStyle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+		}
+
+		if reg != nil {
+			targetSectionIdx := s.idx
+			reg.Register(mouse.Region{
+				ID:     fmt.Sprintf("settings-section-%d", targetSectionIdx),
+				Bounds: mouse.Rect{X: 2, Y: 4 + i*2, W: leftWidth - 4, H: 2},
+				ZIndex: 1,
+				OnClick: func(msg tea.MouseMsg) tea.Cmd {
+					m.SelectedRuntime = targetSectionIdx
+					return nil
+				},
+			})
 		}
 
 		leftSB.WriteString(fmt.Sprintf("%s%s\n\n", prefix, nameStyle.Render(s.name)))
