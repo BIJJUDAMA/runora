@@ -428,15 +428,15 @@ func MatchAssetWithBackend(release *GithubRelease, specs *hardware.HardwareSpecs
 		osMatches := false
 		switch strings.ToLower(specs.OS) {
 		case "windows":
-			if strings.Contains(nameLower, "win") || strings.Contains(nameLower, "windows") {
+			if (strings.Contains(nameLower, "windows") || strings.Contains(nameLower, "win64") || strings.Contains(nameLower, "win-") || strings.Contains(nameLower, "-win")) && !strings.Contains(nameLower, "darwin") && !strings.Contains(nameLower, "macos") && !strings.Contains(nameLower, "linux") {
 				osMatches = true
 			}
 		case "darwin", "macos":
-			if strings.Contains(nameLower, "macos") || strings.Contains(nameLower, "osx") || strings.Contains(nameLower, "darwin") {
+			if (strings.Contains(nameLower, "macos") || strings.Contains(nameLower, "osx") || strings.Contains(nameLower, "darwin")) && !strings.Contains(nameLower, "windows") && !strings.Contains(nameLower, "linux") {
 				osMatches = true
 			}
 		default: // assume linux
-			if strings.Contains(nameLower, "linux") || strings.Contains(nameLower, "ubuntu") || strings.Contains(nameLower, "debian") {
+			if (strings.Contains(nameLower, "linux") || strings.Contains(nameLower, "ubuntu") || strings.Contains(nameLower, "debian")) && !strings.Contains(nameLower, "darwin") && !strings.Contains(nameLower, "macos") && !strings.Contains(nameLower, "windows") {
 				osMatches = true
 			}
 		}
@@ -1437,31 +1437,19 @@ func InstallOnnxVersionSlot(archivePath string, onnxDir string, versionTag strin
 }
 
 // MatchAppAsset finds the precompiled binary release asset corresponding to the current platform.
+// MatchAppAsset finds the most suitable Runora application release package for the current host OS and architecture.
 func MatchAppAsset(release *GithubRelease) (*ReleaseAsset, error) {
+	return MatchAppAssetExplicit(release, runtime.GOOS, runtime.GOARCH)
+}
+
+// MatchAppAssetExplicit finds the most suitable Runora application release package for specified target OS and architecture.
+func MatchAppAssetExplicit(release *GithubRelease, targetOS string, targetArch string) (*ReleaseAsset, error) {
 	if release == nil || len(release.Assets) == 0 {
 		return nil, fmt.Errorf("release contains no downloadable assets")
 	}
 
-	targetOS := runtime.GOOS     // "windows", "darwin", "linux"
-	targetArch := runtime.GOARCH // "amd64", "arm64", "386"
-
-	var osTokens []string
-	switch targetOS {
-	case "windows":
-		osTokens = []string{"windows", "win", ".exe"}
-	case "darwin":
-		osTokens = []string{"darwin", "macos", "osx", "apple"}
-	case "linux":
-		osTokens = []string{"linux"}
-	}
-
-	var archTokens []string
-	switch targetArch {
-	case "amd64":
-		archTokens = []string{"amd64", "x86_64", "x64", "64bit"}
-	case "arm64":
-		archTokens = []string{"arm64", "aarch64"}
-	}
+	targetOS = strings.ToLower(targetOS)
+	targetArch = strings.ToLower(targetArch)
 
 	var bestAsset *ReleaseAsset
 	bestScore := -1
@@ -1480,36 +1468,56 @@ func MatchAppAsset(release *GithubRelease) (*ReleaseAsset, error) {
 			score += 10
 		}
 
-		matchedOS := false
-		for _, tok := range osTokens {
-			if strings.Contains(nameLower, tok) {
-				matchedOS = true
-				score += 20
-				break
+		// 1. Strict OS Disqualification & Scoring
+		switch targetOS {
+		case "windows":
+			if !isWindowsAsset(nameLower) {
+				continue
 			}
-		}
-		if !matchedOS {
+			score += 40
+		case "darwin", "macos":
+			if !isDarwinAsset(nameLower) {
+				continue
+			}
+			score += 40
+		case "linux":
+			if !isLinuxAsset(nameLower) {
+				continue
+			}
+			score += 40
+		default:
 			continue
 		}
 
-		matchedArch := false
-		for _, tok := range archTokens {
-			if strings.Contains(nameLower, tok) {
-				matchedArch = true
-				score += 20
-				break
+		// 2. Strict Architecture Disqualification & Scoring
+		switch targetArch {
+		case "amd64", "x86_64", "x64":
+			if strings.Contains(nameLower, "arm64") || strings.Contains(nameLower, "aarch64") || strings.Contains(nameLower, "-arm") {
+				continue
 			}
+			if strings.Contains(nameLower, "amd64") || strings.Contains(nameLower, "x86_64") || strings.Contains(nameLower, "x64") || strings.Contains(nameLower, "64bit") {
+				score += 40
+			} else {
+				score += 10
+			}
+		case "arm64", "aarch64":
+			if strings.Contains(nameLower, "amd64") || strings.Contains(nameLower, "x86_64") || strings.Contains(nameLower, "x64") {
+				continue
+			}
+			if strings.Contains(nameLower, "arm64") || strings.Contains(nameLower, "aarch64") || strings.Contains(nameLower, "arm") {
+				score += 40
+			} else {
+				continue
+			}
+		default:
+			continue
 		}
-		if !matchedArch && targetArch == "amd64" && !strings.Contains(nameLower, "arm") && !strings.Contains(nameLower, "aarch64") {
-			matchedArch = true
+
+		// 3. Preferred archive suffix for OS
+		if targetOS == "windows" && strings.HasSuffix(nameLower, ".zip") {
 			score += 10
-		}
-		if !matchedArch {
-			continue
-		}
-
-		if strings.HasSuffix(nameLower, ".zip") || strings.HasSuffix(nameLower, ".tar.gz") || strings.HasSuffix(nameLower, ".tgz") || strings.HasSuffix(nameLower, ".exe") {
-			score += 5
+		} else if targetOS != "windows" && (strings.HasSuffix(nameLower, ".tar.gz") || strings.HasSuffix(nameLower, ".tgz")) {
+			score += 10
 		}
 
 		if score > bestScore {
@@ -1523,6 +1531,44 @@ func MatchAppAsset(release *GithubRelease) (*ReleaseAsset, error) {
 	}
 
 	return nil, fmt.Errorf("no precompiled release asset found for %s-%s in release %s", targetOS, targetArch, release.TagName)
+}
+
+func isWindowsAsset(nameLower string) bool {
+	if strings.Contains(nameLower, "darwin") || strings.Contains(nameLower, "macos") || strings.Contains(nameLower, "osx") || strings.Contains(nameLower, "linux") {
+		return false
+	}
+	return strings.Contains(nameLower, "windows") ||
+		strings.Contains(nameLower, "win64") ||
+		strings.Contains(nameLower, "win32") ||
+		strings.Contains(nameLower, "-win-") ||
+		strings.Contains(nameLower, "_win_") ||
+		strings.Contains(nameLower, "-win_") ||
+		strings.Contains(nameLower, "_win-") ||
+		strings.HasPrefix(nameLower, "win-") ||
+		strings.HasPrefix(nameLower, "win_") ||
+		strings.HasSuffix(nameLower, ".exe") ||
+		strings.HasSuffix(nameLower, ".zip")
+}
+
+func isDarwinAsset(nameLower string) bool {
+	if strings.Contains(nameLower, "windows") || strings.Contains(nameLower, "linux") || strings.Contains(nameLower, "-win-") || strings.Contains(nameLower, "_win_") {
+		return false
+	}
+	return strings.Contains(nameLower, "darwin") ||
+		strings.Contains(nameLower, "macos") ||
+		strings.Contains(nameLower, "osx") ||
+		strings.Contains(nameLower, "apple")
+}
+
+func isLinuxAsset(nameLower string) bool {
+	if strings.Contains(nameLower, "windows") || strings.Contains(nameLower, "darwin") || strings.Contains(nameLower, "macos") || strings.Contains(nameLower, "osx") || strings.Contains(nameLower, "-win-") {
+		return false
+	}
+	return strings.Contains(nameLower, "linux") ||
+		strings.Contains(nameLower, "ubuntu") ||
+		strings.Contains(nameLower, "debian") ||
+		strings.Contains(nameLower, "centos") ||
+		strings.Contains(nameLower, "alpine")
 }
 
 // DownloadAndInstallApp downloads the matching release asset from GitHub or falls back to go install.

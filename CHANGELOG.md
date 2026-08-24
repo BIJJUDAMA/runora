@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-08-24
+
+### Fixed
+- Fixed in-app self-updater asset matching for Windows where `darwin` release assets matched the `win` substring token, causing macOS binaries to be downloaded on Windows.
+- Added strict mutual exclusivity and dedicated OS classifiers (`isWindowsAsset`, `isDarwinAsset`, `isLinuxAsset`) in release asset matching.
+- Enhanced target executable path resolution to find the true installed binary in system `PATH` and `%USERPROFILE%\go\bin` even when running from temporary builds.
+
 ## [2.2.0] - 2026-08-24
 
 ### Added

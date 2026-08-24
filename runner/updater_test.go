@@ -702,39 +702,40 @@ func TestDriverWithVersionTag(t *testing.T) {
 }
 
 func TestMatchAppAssetAcrossPlatforms(t *testing.T) {
+	// Alphabetical order as returned by GitHub releases API (darwin first)
 	rel := &GithubRelease{
-		TagName: "v2.1.0",
+		TagName: "v2.2.0",
 		Assets: []ReleaseAsset{
-			{Name: "runora-windows-amd64.zip", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-windows-amd64.zip"},
-			{Name: "runora-windows-arm64.zip", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-windows-arm64.zip"},
-			{Name: "runora-darwin-arm64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-darwin-arm64.tar.gz"},
-			{Name: "runora-darwin-amd64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-darwin-amd64.tar.gz"},
-			{Name: "runora-linux-amd64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-linux-amd64.tar.gz"},
-			{Name: "runora-linux-arm64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-linux-arm64.tar.gz"},
+			{Name: "runora-darwin-amd64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.2.0/runora-darwin-amd64.tar.gz"},
+			{Name: "runora-darwin-arm64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.2.0/runora-darwin-arm64.tar.gz"},
+			{Name: "runora-linux-amd64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.2.0/runora-linux-amd64.tar.gz"},
+			{Name: "runora-linux-arm64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.2.0/runora-linux-arm64.tar.gz"},
+			{Name: "runora-windows-amd64.zip", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.2.0/runora-windows-amd64.zip"},
+			{Name: "runora-windows-arm64.zip", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.2.0/runora-windows-arm64.zip"},
 		},
 	}
 
-	asset, err := MatchAppAsset(rel)
-	if err != nil {
-		t.Fatalf("MatchAppAsset failed for current platform (%s-%s): %v", runtime.GOOS, runtime.GOARCH, err)
-	}
-	if asset == nil {
-		t.Fatalf("expected matched asset, got nil")
+	tests := []struct {
+		targetOS   string
+		targetArch string
+		expected   string
+	}{
+		{"windows", "amd64", "runora-windows-amd64.zip"},
+		{"windows", "arm64", "runora-windows-arm64.zip"},
+		{"darwin", "arm64", "runora-darwin-arm64.tar.gz"},
+		{"darwin", "amd64", "runora-darwin-amd64.tar.gz"},
+		{"linux", "amd64", "runora-linux-amd64.tar.gz"},
+		{"linux", "arm64", "runora-linux-arm64.tar.gz"},
 	}
 
-	// Verify asset matches current OS
-	switch runtime.GOOS {
-	case "windows":
-		if !strings.Contains(asset.Name, "windows") {
-			t.Errorf("expected windows asset, got %s", asset.Name)
+	for _, tc := range tests {
+		asset, err := MatchAppAssetExplicit(rel, tc.targetOS, tc.targetArch)
+		if err != nil {
+			t.Errorf("MatchAppAssetExplicit failed for %s-%s: %v", tc.targetOS, tc.targetArch, err)
+			continue
 		}
-	case "darwin":
-		if !strings.Contains(asset.Name, "darwin") && !strings.Contains(asset.Name, "macos") {
-			t.Errorf("expected darwin/macos asset, got %s", asset.Name)
-		}
-	case "linux":
-		if !strings.Contains(asset.Name, "linux") {
-			t.Errorf("expected linux asset, got %s", asset.Name)
+		if asset == nil || asset.Name != tc.expected {
+			t.Errorf("for %s-%s expected asset %s, got %v", tc.targetOS, tc.targetArch, tc.expected, asset)
 		}
 	}
 }
