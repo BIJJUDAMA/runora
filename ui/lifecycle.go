@@ -650,6 +650,79 @@ func (m *LifecycleModel) StartOnnxRollback() tea.Cmd {
 	return m.ReadUpdateChan(ch)
 }
 
+func (m *LifecycleModel) hasLlamaUpdateAvailable() bool {
+	if m.latestTagName == "" {
+		return false
+	}
+	cleanLocal := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(m.localVersion), "v"), "b")
+	cleanLatest := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(m.latestTagName), "v"), "b")
+	return cleanLocal != cleanLatest || cleanLocal == "not installed" || cleanLocal == "unknown" || cleanLocal == ""
+}
+
+func (m *LifecycleModel) hasOnnxUpdateAvailable() bool {
+	if m.onnxLatestVersion == "" {
+		return false
+	}
+	cleanLocal := strings.TrimPrefix(strings.ToLower(m.onnxLocalVersion), "v")
+	cleanLatest := strings.TrimPrefix(strings.ToLower(m.onnxLatestVersion), "v")
+	return cleanLocal != cleanLatest || cleanLocal == "not installed" || cleanLocal == "unknown" || cleanLocal == ""
+}
+
+func (m *LifecycleModel) hasAppUpdateAvailable() bool {
+	if m.appLatestTag == "" {
+		return false
+	}
+	cleanLocal := strings.TrimPrefix(strings.ToLower(m.appVersion), "v")
+	cleanLatest := strings.TrimPrefix(strings.ToLower(m.appLatestTag), "v")
+	return cleanLocal != cleanLatest && !m.appUpdateSuccess
+}
+
+// StartActionSelected implements the primary workflow:
+// If an update is available, pressing Enter/U installs it.
+// If already up-to-date or not yet checked, pressing Enter/U checks for updates.
+func (m *LifecycleModel) StartActionSelected() tea.Cmd {
+	switch m.SelectedRuntime {
+	case 1: // llama.cpp
+		m.updatingRuntime = "llamacpp"
+		if m.hasLlamaUpdateAvailable() {
+			return m.StartUpdate()
+		}
+		return m.StartCheckOnly()
+
+	case 2: // ONNX Runtime
+		m.updatingRuntime = "onnx"
+		if m.hasOnnxUpdateAvailable() {
+			return m.StartOnnxUpdate()
+		}
+		return m.StartOnnxCheckOnly()
+
+	case 3: // Runora App
+		m.updatingRuntime = "app"
+		if m.hasAppUpdateAvailable() {
+			return m.StartAppUpdate()
+		}
+		return m.StartAppCheck()
+
+	case 4: // Model Sources
+		if len(m.config.ModelSources) > 0 {
+			if m.sourceFocus < 0 || m.sourceFocus >= len(m.config.ModelSources) {
+				m.sourceFocus = 0
+			}
+			m.config.ModelSources[m.sourceFocus].Enabled = !m.config.ModelSources[m.sourceFocus].Enabled
+			_ = m.config.Save()
+		}
+		return nil
+
+	default: // API Token (0)
+		m.tokenEditActive = true
+		m.tokenEditTarget = "hf"
+		m.tokenInput.Placeholder = "Enter HF_TOKEN (hf_...)"
+		m.tokenInput.Focus()
+		m.tokenInput.SetValue(m.config.HFToken)
+		return nil
+	}
+}
+
 // StartCheckSelected checks updates for the currently focused runtime component.
 func (m *LifecycleModel) StartCheckSelected() tea.Cmd {
 	switch m.SelectedRuntime {
@@ -787,23 +860,16 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
-				m.sourceFocus--
-				if m.sourceFocus < 0 {
-					m.sourceFocus = len(m.config.ModelSources) - 1
-				}
-			} else {
-				m.PrevRuntime()
-			}
+			m.PrevRuntime()
+			return m, nil
 		case "down", "j":
+			m.NextRuntime()
+			return m, nil
+		case "tab":
 			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
-				m.sourceFocus++
-				if m.sourceFocus >= len(m.config.ModelSources) {
-					m.sourceFocus = 0
-				}
-			} else {
-				m.NextRuntime()
+				m.sourceFocus = (m.sourceFocus + 1) % len(m.config.ModelSources)
 			}
+			return m, nil
 		case "g", "G":
 			m.SelectedRuntime = 0
 			m.tokenEditActive = true
@@ -834,20 +900,42 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 					m.actionMsg = err.Error()
 				}
 			}
-			return m, nil
-		case "r", "R":
-			if m.SelectedRuntime == 4 {
-				m.RefreshModelSources()
-				m.actionMsg = "Model sources rescanned."
-			}
-			return m, nil
-		case "space", " ", "enter":
+		case "enter", "u", "U", "c", "C":
 			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
 				if m.sourceFocus < 0 || m.sourceFocus >= len(m.config.ModelSources) {
 					m.sourceFocus = 0
 				}
 				m.config.ModelSources[m.sourceFocus].Enabled = !m.config.ModelSources[m.sourceFocus].Enabled
 				_ = m.config.Save()
+				return m, nil
+			}
+			if m.state != StateChecking && m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
+				cmd := m.StartActionSelected()
+				return m, cmd
+			}
+			return m, nil
+		case "space", " ":
+			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
+				if m.sourceFocus < 0 || m.sourceFocus >= len(m.config.ModelSources) {
+					m.sourceFocus = 0
+				}
+				m.config.ModelSources[m.sourceFocus].Enabled = !m.config.ModelSources[m.sourceFocus].Enabled
+				_ = m.config.Save()
+				return m, nil
+			}
+			if m.state != StateChecking && m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
+				cmd := m.StartActionSelected()
+				return m, cmd
+			}
+			return m, nil
+		case "r", "R":
+			if m.SelectedRuntime == 4 {
+				m.RefreshModelSources()
+				m.actionMsg = "Model sources rescanned."
+				return m, nil
+			} else if m.hasBackup && m.state != StateChecking && m.state != StateDownloading && m.state != StateExtracting && m.state != StateVerifying && m.state != StateRollingBack {
+				cmd := m.StartRollbackSelected()
+				return m, cmd
 			}
 			return m, nil
 		case "1":
@@ -891,6 +979,9 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 
 	case updateMsg:
 		m.state = msg.state
+		if msg.target != "" {
+			m.updatingRuntime = msg.target
+		}
 		if msg.err != nil {
 			m.err = msg.err
 			m.actionMsg = ""
@@ -1109,9 +1200,11 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		}
 		llamaSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Installed Slots:", slotsDisplay, lipgloss.NewStyle().Foreground(ColorMuted).Render("[V: Switch Slot]")))
 
-		updateLlamaStatus := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([U] to check updates)")
+		updateLlamaStatus := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([Enter/U] to check updates)")
 		if m.latestTagName != "" {
-			if m.latestTagName == m.localVersion {
+			cleanLocal := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(m.localVersion), "v"), "b")
+			cleanLatest := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(m.latestTagName), "v"), "b")
+			if cleanLocal == cleanLatest && cleanLocal != "not installed" && cleanLocal != "unknown" && cleanLocal != "" {
 				updateLlamaStatus = StyleSuccess.Render("✓ Up-to-date (" + m.latestTagName + ")")
 			} else {
 				updateLlamaStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.latestTagName + " (Update Available)  [Enter/U: Install]")
@@ -1150,12 +1243,14 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		}
 		onnxSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "Backend Accelerator:", lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(onnxBackendDisplay), lipgloss.NewStyle().Foreground(ColorMuted).Render("[B: Cycle Accelerator]")))
 
-		updateOnnxStatus := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([U] to check updates)")
+		updateOnnxStatus := lipgloss.NewStyle().Foreground(ColorMuted).Render("Not checked ([Enter/U] to check updates)")
 		if m.onnxLatestVersion != "" {
-			if m.onnxLatestVersion == m.onnxLocalVersion {
+			cleanLocal := strings.TrimPrefix(strings.ToLower(m.onnxLocalVersion), "v")
+			cleanLatest := strings.TrimPrefix(strings.ToLower(m.onnxLatestVersion), "v")
+			if cleanLocal == cleanLatest && cleanLocal != "not installed" && cleanLocal != "unknown" && cleanLocal != "" {
 				updateOnnxStatus = StyleSuccess.Render("✓ Up-to-date (" + m.onnxLatestVersion + ")")
 			} else {
-				updateOnnxStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.onnxLatestVersion + " (Update Available)  [Enter/O: Install]")
+				updateOnnxStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.onnxLatestVersion + " (Update Available)  [Enter/U: Install]")
 			}
 		}
 		onnxSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Update Status:", updateOnnxStatus))
@@ -1165,7 +1260,7 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 			onnxBackupStr = StyleSuccess.Render("Available (onnxruntime.backup/)") + "  " + lipgloss.NewStyle().Foreground(ColorMuted).Render("[R: Rollback]")
 		}
 		onnxSB.WriteString(fmt.Sprintf("  %-22s %s\n\n", "Backup & Recovery:", onnxBackupStr))
-		onnxSB.WriteString(fmt.Sprintf("  Actions: %s Install/Update ONNX  │  %s Rollback Backup\n", StyleHelpKey.Render("[Enter/O]"), StyleHelpKey.Render("[R]")))
+		onnxSB.WriteString(fmt.Sprintf("  Actions: %s Check & Install Update  │  %s Rollback Backup\n", StyleHelpKey.Render("[Enter/U]"), StyleHelpKey.Render("[R]")))
 		onnxContent := strings.TrimRight(onnxSB.String(), "\n")
 		rightCard = SurfaceCardWithHeight("ONNX Runtime Inspector", onnxContent, rightWidth, cardHeight, true, "ONNX")
 
@@ -1175,27 +1270,23 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
 		appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "Runora CLI Version:", appVerStr))
 
-		updateAppStatus := StyleSuccess.Render("✓ Up-to-date")
+		updateAppStatus := StyleSuccess.Render("✓ Up-to-date (" + m.appVersion + ")")
 		if m.appChecking {
 			updateAppStatus = lipgloss.NewStyle().Foreground(ColorMuted).Render("Checking...")
 		} else if m.appCheckErr != nil {
 			updateAppStatus = StyleDanger.Render("Check failed")
 		} else if m.appLatestTag != "" {
-			if m.appLatestTag == m.appVersion || m.appUpdateSuccess {
-				updateAppStatus = StyleSuccess.Render("✓ Up-to-date (" + m.appLatestTag + ")")
+			cleanTag := strings.TrimPrefix(strings.ToLower(m.appLatestTag), "v")
+			cleanVer := strings.TrimPrefix(strings.ToLower(m.appVersion), "v")
+			if cleanTag == cleanVer || m.appUpdateSuccess {
+				updateAppStatus = StyleSuccess.Render("✓ Up-to-date (" + m.appVersion + ")")
 			} else {
-				updateAppStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag + " (Update Available)  [Enter/A: Self-Update]")
+				updateAppStatus = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(m.appLatestTag + " (Update Available)  [Enter/U: Self-Update]")
 			}
 		}
 		appSB.WriteString(fmt.Sprintf("  %-22s %s\n", "App Update Status:", updateAppStatus))
-
-		themeName := strings.Title(m.config.Theme)
-		if themeName == "" {
-			themeName = "Forest"
-		}
-		appSB.WriteString(fmt.Sprintf("  %-22s %s  %s\n", "UI Theme Palette:", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(themeName), lipgloss.NewStyle().Foreground(ColorMuted).Render("[Y: Switch Theme]")))
 		appSB.WriteString(fmt.Sprintf("  %-22s %s\n\n", "Onboarding Tour:", lipgloss.NewStyle().Foreground(ColorMuted).Render("[N: Re-run Welcome Tour]")))
-		appSB.WriteString(fmt.Sprintf("  Actions: %s Self-Update App  │  %s Themes  │  %s Welcome Tour\n", StyleHelpKey.Render("[Enter/A]"), StyleHelpKey.Render("[Y]"), StyleHelpKey.Render("[N]")))
+		appSB.WriteString(fmt.Sprintf("  Actions: %s Check & Install Update  │  %s Re-run Welcome Tour\n", StyleHelpKey.Render("[Enter/U]"), StyleHelpKey.Render("[N]")))
 		appContent := strings.TrimRight(appSB.String(), "\n")
 		rightCard = SurfaceCardWithHeight("Runora System & Tools Inspector", appContent, rightWidth, cardHeight, true, "System")
 
@@ -1276,13 +1367,13 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 	if m.state != StateIdle {
 		var statusSB strings.Builder
 		statusText := ""
-		targetName := "Inference runtime"
-		if m.updatingRuntime == "onnx" {
+		targetName := "llama.cpp"
+		if m.updatingRuntime == "onnx" || (m.updatingRuntime == "" && m.SelectedRuntime == 2) {
 			targetName = "ONNX Runtime"
-		} else if m.updatingRuntime == "llamacpp" {
-			targetName = "llama.cpp"
-		} else if m.updatingRuntime == "app" {
+		} else if m.updatingRuntime == "app" || (m.updatingRuntime == "" && m.SelectedRuntime == 3) {
 			targetName = "Runora App"
+		} else if m.updatingRuntime == "llamacpp" || (m.updatingRuntime == "" && m.SelectedRuntime == 1) {
+			targetName = "llama.cpp"
 		}
 
 		switch m.state {
@@ -1291,7 +1382,7 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		case StateNoUpdate:
 			statusText = StyleSuccess.Render(fmt.Sprintf("%s is up-to-date.", targetName))
 		case StateUpdateAvailable:
-			statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(fmt.Sprintf("%s update available - press [U] or [Space] to install.", targetName))
+			statusText = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(fmt.Sprintf("%s update available - press [Enter] or [U] to install.", targetName))
 		case StateDownloading:
 			statusText = fmt.Sprintf("Downloading %s: %s", targetName, m.actionMsg)
 		case StateExtracting:

@@ -1428,46 +1428,20 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.screenMode = ScreenBrowser
 				m.rebuildSidebar()
-			case "down", "j":
-				m.lifecycleModel.NextRuntime()
-			case "up", "k", "K":
-				m.lifecycleModel.PrevRuntime()
-			case "u", "U", "c", "C", "enter":
-				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-					cmds = append(cmds, m.lifecycleModel.StartCheckAll())
-				}
-			case "r", "R":
-				if m.lifecycleModel.hasBackup && m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-					cmd := m.lifecycleModel.StartRollbackSelected()
-					if cmd != nil {
-						cmds = append(cmds, cmd)
-					}
-				}
-			case "o", "O":
-				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-					m.lifecycleModel.SelectedRuntime = 2
-					m.lifecycleModel.updatingRuntime = "onnx"
-					cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
-				}
-			case "a", "A":
-				if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
-					m.lifecycleModel.SelectedRuntime = 3
-					cmds = append(cmds, m.lifecycleModel.StartAppUpdate())
-				}
 			case "y", "Y":
 				m.themePicker = NewThemePickerModel(m.config.Theme)
 				m.themePickerActive = true
-			case "s", "S", "b", "B", "t", "T", "g", "G", "v", "V", "e", "E":
-				_, cmd := m.lifecycleModel.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
 			case "n", "N":
 				m.config.OnboardingCompleted = false
 				_ = m.config.Save()
 				m.onboardingActive = true
 				m.onboardingStep = StepWelcome
 				m.screenMode = ScreenBrowser
+			default:
+				_, cmd := m.lifecycleModel.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		} else if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
 			switch msg.String() {

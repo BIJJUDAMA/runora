@@ -224,3 +224,134 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateAvailabilityChecks(t *testing.T) {
+	cfg := &config.Config{Paths: config.Paths{LlamaCPP: "/app/llama.cpp", OnnxRuntime: "/app/onnxruntime"}}
+	m := NewLifecycleModel(cfg, &mockModelRuntime{})
+
+	// 1. App version comparison
+	m.appVersion = "v2.1.1"
+	m.appLatestTag = "v2.1.1"
+	if m.hasAppUpdateAvailable() {
+		t.Errorf("expected false when app version matches latest tag with 'v'")
+	}
+	m.appVersion = "2.1.1"
+	m.appLatestTag = "v2.1.1"
+	if m.hasAppUpdateAvailable() {
+		t.Errorf("expected false when app version matches latest tag ignoring 'v'")
+	}
+	m.appVersion = "v2.1.1"
+	m.appLatestTag = "v2.1.2"
+	if !m.hasAppUpdateAvailable() {
+		t.Errorf("expected true when newer app tag is available")
+	}
+
+	// 2. llama.cpp version comparison
+	m.localVersion = "b4850"
+	m.latestTagName = "b4850"
+	if m.hasLlamaUpdateAvailable() {
+		t.Errorf("expected false when llama version matches latest tag")
+	}
+	m.localVersion = "Not Installed"
+	m.latestTagName = "b4850"
+	if !m.hasLlamaUpdateAvailable() {
+		t.Errorf("expected true when llama is not installed and latest tag is known")
+	}
+	m.localVersion = "b4800"
+	m.latestTagName = "b4850"
+	if !m.hasLlamaUpdateAvailable() {
+		t.Errorf("expected true when newer llama release is available")
+	}
+
+	// 3. ONNX version comparison
+	m.onnxLocalVersion = "v1.20.0"
+	m.onnxLatestVersion = "v1.20.0"
+	if m.hasOnnxUpdateAvailable() {
+		t.Errorf("expected false when ONNX version matches latest tag")
+	}
+	m.onnxLocalVersion = "Not Installed"
+	m.onnxLatestVersion = "v1.20.1"
+	if !m.hasOnnxUpdateAvailable() {
+		t.Errorf("expected true when ONNX is not installed and latest tag is known")
+	}
+}
+
+func TestEnterKeyUpdateWorkflow(t *testing.T) {
+	cfg := &config.Config{Paths: config.Paths{LlamaCPP: "/app/llama.cpp", OnnxRuntime: "/app/onnxruntime"}}
+	m := NewLifecycleModel(cfg, &mockModelRuntime{})
+
+	// Test Section 1 (llama.cpp): When up-to-date, Enter triggers check
+	m.SelectedRuntime = 1
+	m.localVersion = "b4850"
+	m.latestTagName = "b4850"
+	cmd := m.StartActionSelected()
+	if cmd == nil {
+		t.Errorf("expected command returned on Enter")
+	}
+	if m.updatingRuntime != "llamacpp" {
+		t.Errorf("expected updatingRuntime to be 'llamacpp', got %q", m.updatingRuntime)
+	}
+
+	// Test Section 1: When update available, Enter triggers update
+	m.latestTagName = "b4900"
+	cmd = m.StartActionSelected()
+	if cmd == nil {
+		t.Errorf("expected command returned on Enter when update is available")
+	}
+
+	// Test Section 2 (ONNX): When up-to-date, Enter triggers check
+	m.SelectedRuntime = 2
+	m.onnxLocalVersion = "v1.20.0"
+	m.onnxLatestVersion = "v1.20.0"
+	cmd = m.StartActionSelected()
+	if cmd == nil {
+		t.Errorf("expected command returned on Enter for ONNX")
+	}
+	if m.updatingRuntime != "onnx" {
+		t.Errorf("expected updatingRuntime to be 'onnx', got %q", m.updatingRuntime)
+	}
+
+	// Test Section 3 (App): When up-to-date, Enter triggers check
+	m.SelectedRuntime = 3
+	m.appVersion = "v2.1.1"
+	m.appLatestTag = "v2.1.1"
+	cmd = m.StartActionSelected()
+	if cmd == nil {
+		t.Errorf("expected command returned on Enter for App")
+	}
+	if m.updatingRuntime != "app" {
+		t.Errorf("expected updatingRuntime to be 'app', got %q", m.updatingRuntime)
+	}
+}
+
+func TestAppInspectorNoThemeDuplication(t *testing.T) {
+	cfg := &config.Config{Paths: config.Paths{LlamaCPP: "/app/llama.cpp"}}
+	m := NewLifecycleModel(cfg, &mockModelRuntime{})
+	m.SelectedRuntime = 3
+
+	view := m.View(100, 40)
+	if strings.Contains(view, "UI Theme Palette") {
+		t.Errorf("expected view NOT to contain duplicate 'UI Theme Palette', got:\n%s", view)
+	}
+	if strings.Contains(view, "[Y: Switch Theme]") || strings.Contains(view, "[Y] Themes") {
+		t.Errorf("expected view NOT to contain duplicate '[Y] Themes' action, got:\n%s", view)
+	}
+}
+
+func TestStatusLineTargetScoping(t *testing.T) {
+	cfg := &config.Config{Paths: config.Paths{LlamaCPP: "/app/llama.cpp"}}
+	m := NewLifecycleModel(cfg, &mockModelRuntime{})
+
+	// When viewing llama.cpp and update available
+	m.SelectedRuntime = 1
+	m.updatingRuntime = "llamacpp"
+	m.state = StateUpdateAvailable
+	view := m.View(100, 40)
+	if !strings.Contains(view, "llama.cpp update available") {
+		t.Errorf("expected status line to say 'llama.cpp update available', got:\n%s", view)
+	}
+	if strings.Contains(view, "Runora App update available") {
+		t.Errorf("expected status line NOT to mention 'Runora App', got:\n%s", view)
+	}
+}
+
