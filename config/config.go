@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the current semantic release version of Runora.
-const Version = "v2.2.1"
+const Version = "v2.1.3"
 
 // AppDataDir returns the fixed directory where runora stores all its data.
 // Each supported platform places data in its conventional location.
