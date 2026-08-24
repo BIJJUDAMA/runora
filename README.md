@@ -7,15 +7,25 @@ A terminal-based manager, launcher, and monitoring dashboard for local large lan
 ## Key Features
 
 - **Global Number-Row Navigation & Keymap**:
-  - Instantaneous top-level routing using number keys `1` through `6` across all views:
+  - Instantaneous top-level routing using number keys `1` through `7` across all views:
     - `[1] Models`: Bento-card model explorer and metadata inspection deck.
     - `[2] Dashboard`: Dual-column launch dashboard, 5x5 profile grid, and CLI preview.
     - `[3] Monitor`: Multi-instance server supervisor, live `/slots` context gauges, and throughput metrics.
     - `[4] Downloads`: Direct URL / Hugging Face download manager with queue resumption.
     - `[5] Benchmark`: Decoupled prompt latency (TTFT) and generation throughput dashboard.
     - `[6] Settings`: Multi-runtime version slots, release channels, and API token manager.
+    - `[7] Chat`: Integrated terminal chat playground with real-time SSE streaming and 3-layer context compaction.
   - Global cycling with `Tab` / `Shift+Tab` and `[` / `]`.
   - Persistent hardware telemetry header displaying live active server counts and GPU VRAM utilization meters.
+
+- **Integrated Terminal Chat Playground & 3-Layer Hybrid Compaction**:
+  - Direct conversational interaction with running models without external clients, browsers, or curl commands.
+  - Incremental token streaming over Server-Sent Events (SSE) with live speed telemetry (tokens/sec) and token accounting.
+  - 3-Layer hybrid context compaction with 20% protected verbatim tail and lossless preservation of original messages.
+  - On-demand (`[K]`) and automated (>85% context pressure) history compaction with summary checkpoints.
+  - Multiple named chat sessions with atomic JSON persistence under `{appDataDir}/chats/`.
+  - Real-time parameter tuning overlay (`[P]`) for Temperature, Top-P, Top-K, and Context Size.
+  - Inline Model Launcher for seamless startup when entering chat without an active model server.
 
 - **Bento Card TUI Design & 10 Built-In Themes**:
   - Modular Bento surface card architecture across all screens with responsive height clamping.
@@ -121,8 +131,8 @@ Flags:
 
 ### Global Navigation
 
-- `1` / `2` / `3` / `4` / `5` / `6`: Jump directly to screen (1: Models, 2: Dashboard, 3: Monitor, 4: Downloads, 5: Benchmark, 6: Settings).
-- `Tab` / `Shift+Tab` or `]` / `[`: Cycle forward / backward through the 6 main screens.
+- `1` / `2` / `3` / `4` / `5` / `6` / `7`: Jump directly to screen (1: Models, 2: Dashboard, 3: Monitor, 4: Downloads, 5: Benchmark, 6: Settings, 7: Chat).
+- `Tab` / `Shift+Tab` or `]` / `[`: Cycle forward / backward through the 7 main screens.
 - `Y`: Open interactive Theme Picker modal.
 - `L`: Open real-time Log Streamer.
 - `?`: Toggle help and key binding overlay.
@@ -181,18 +191,32 @@ Flags:
 - `E`: Edit API tokens (GitHub / Hugging Face).
 - `S`: Save updated API tokens.
 
+### [7] Chat Playground
+
+- `Enter`: Send message to active model server with live token streaming.
+- `Ctrl+Enter`: Insert newline in multiline prompt input.
+- `Tab`: Switch focus between Sessions list (left) and Chat view/input (right).
+- `N`: Create a new named chat session.
+- `R`: Rename active session.
+- `D`: Delete active session (with `[Y/N]` confirmation).
+- `K`: Trigger 3-layer hybrid context compaction.
+- `P`: Toggle Generation Parameters overlay (Temperature, Top-P, Top-K, Context Size).
+- `C`: Copy last assistant response to clipboard.
+- `Esc` / `Ctrl+C`: Stop token streaming mid-generation.
+
 ---
 
 ## Mouse and Touchpad Navigation
 
 Runora supports first-class mouse and touchpad interaction alongside the keyboard workflow:
 
-- **Top Navigation Tabs**: Click any header tab (`[1] Models`, `[2] Launch`, `[3] Monitor`, `[4] Downloads`, `[5] Benchmarks`, `[6] Settings`) to switch views directly.
+- **Top Navigation Tabs**: Click any header tab (`[1] Models`, `[2] Launch`, `[3] Monitor`, `[4] Downloads`, `[5] Benchmarks`, `[6] Settings`, `[7] Chat`) to switch views directly.
 - **Model Explorer**: Click any model row to select; double-click to immediately open the Launch Dashboard; use the scroll wheel to browse large model libraries.
 - **Launch Dashboard**: Click any profile card in the 5x5 Bento grid to select; double-click to immediately launch the inference server; click `[C] Copy Launch Command` to copy to clipboard.
 - **Server Monitor**: Click any active server instance to inspect runtime metrics; double-click to stream logs; click action buttons (`[R]`, `[S]`, `[Ctrl+K]`, `[L]`).
 - **Downloader**: Click URL or destination filename input fields to focus and type; click queue tasks to inspect progress.
 - **Settings & Inspector**: Click component items in the left panel to inspect details; click input fields to edit API tokens.
+- **Chat Playground**: Click sessions to switch conversation history; click inputs to type.
 - **Theme Picker & Modals**: Click themes to preview; double-click to apply and dismiss; click anywhere outside the modal dialog to dismiss.
 
 ---
@@ -206,6 +230,7 @@ runora/
 ├── config.json              # Application preferences, favorites, and directory paths
 ├── models/                  # Primary recursive model storage directory
 ├── profiles/                # JSON profile configurations (5x5 Bento grid)
+├── chats/                   # Persistent conversation histories and compaction checkpoints
 ├── benchmarks/              # Benchmark history database (history.json)
 ├── downloads/               # Active download workspace and .part files
 ├── cache/                   # GGUF metadata cache and runtime logs

@@ -875,6 +875,8 @@ func GlobalTabHeaderWithRegistry(activeScreen ScreenMode, width int, runningCoun
 		activeIndex = 4
 	case ScreenSettings:
 		activeIndex = 5
+	case ScreenChat:
+		activeIndex = 6
 	}
 
 	tab3Label := "[3] Monitor"
@@ -894,6 +896,7 @@ func GlobalTabHeaderWithRegistry(activeScreen ScreenMode, width int, runningCoun
 		{3, ScreenDownloader, "[4] Downloads", "tab-downloader"},
 		{4, ScreenPerformanceDashboard, "[5] Bench", "tab-benchmark"},
 		{5, ScreenSettings, "[6] Settings", "tab-settings"},
+		{6, ScreenChat, "[7] Chat", "tab-chat"},
 	}
 
 	activeBg := ColorSelected

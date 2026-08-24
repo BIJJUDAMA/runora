@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BIJJUDAMA/runora/benchmark"
+	"github.com/BIJJUDAMA/runora/chat"
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
@@ -46,6 +47,7 @@ const (
 	ScreenDownloader
 	ScreenProfileCreator
 	ScreenLogStreamer
+	ScreenChat
 )
 
 type OnboardingStep int
@@ -103,6 +105,7 @@ type BrowserModel struct {
 	lifecycleModel      *LifecycleModel
 	profileCreatorModel   *ProfileCreatorModel
 	logStreamerModel      *LogStreamerModel
+	chatModel             *ChatModel
 	onboardingActive      bool
 	onboardingStep        OnboardingStep
 	onboardingTokenInput  textinput.Model // Hugging Face token input
@@ -195,7 +198,7 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 	// Apply theme colors
 	ApplyTheme(cfg.Theme)
 
-	return &BrowserModel{
+	bm := &BrowserModel{
 		config:                cfg,
 		srvRunner:             srv,
 		loading:               true,
@@ -221,7 +224,11 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 		llamaCPPMissingActive: llamaCPPMissing && flag.Lookup("test.v") == nil,
 		toasts:                NewToastManager(),
 		mouseReg:              mouse.NewRegistry(),
+		chatModel:             NewChatModel(chat.NewService(cfg.Paths.Chats), srv, nil, specs, nil, nil),
 	}
+	bm.chatModel.toasts = bm.toasts
+	bm.chatModel.mouseReg = bm.mouseReg
+	return bm
 }
 
 func (m *BrowserModel) isModelRunning(filePath string) bool {
@@ -341,6 +348,11 @@ func (m *BrowserModel) navigateToScreen(target ScreenMode) tea.Cmd {
 			m.lifecycleModel.RefreshLocalVersion()
 			m.lifecycleModel.RefreshBackupStatus()
 		}
+	case ScreenChat:
+		if m.chatModel != nil {
+			m.chatModel.SetModels(m.models)
+			m.chatModel.ReloadSessions()
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -353,6 +365,7 @@ func (m *BrowserModel) cycleScreen(direction int) tea.Cmd {
 		ScreenDownloader,           // 3
 		ScreenPerformanceDashboard, // 4
 		ScreenSettings,             // 5
+		ScreenChat,                 // 6
 	}
 
 	currentIndex := 0
@@ -369,6 +382,8 @@ func (m *BrowserModel) cycleScreen(direction int) tea.Cmd {
 		currentIndex = 4
 	case ScreenSettings:
 		currentIndex = 5
+	case ScreenChat:
+		currentIndex = 6
 	}
 
 	nextIndex := (currentIndex + direction) % len(mainScreens)
@@ -974,6 +989,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.chatModel != nil {
+			m.chatModel, _ = m.chatModel.Update(msg)
+		}
 
 	case ToastExpireMsg:
 		if m.toasts != nil {
@@ -990,6 +1008,9 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if override, ok := m.config.ModelTasks[mod.FilePath]; ok {
 					mod.Task = override
 				}
+			}
+			if m.chatModel != nil {
+				m.chatModel.SetModels(m.models)
 			}
 			m.filterModels()
 
@@ -1095,6 +1116,15 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateMsg:
 		if m.lifecycleModel != nil {
 			_, cmd := m.lifecycleModel.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case chatTokenMsg, chatStreamDoneMsg, chatCompactDoneMsg, chatPollRunningMsg:
+		if m.chatModel != nil {
+			var cmd tea.Cmd
+			m.chatModel, cmd = m.chatModel.Update(msg)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -1250,6 +1280,8 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.navigateToScreen(ScreenPerformanceDashboard)
 		case "6":
 			return m, m.navigateToScreen(ScreenSettings)
+		case "7":
+			return m, m.navigateToScreen(ScreenChat)
 		case "tab", "]":
 			return m, m.cycleScreen(1)
 		case "shift+tab", "[":
@@ -1442,6 +1474,20 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
+			}
+		} else if m.screenMode == ScreenChat && m.chatModel != nil {
+			switch msg.String() {
+			case "esc":
+				if m.chatModel.state == chatStateIdle && m.chatModel.sessionsFocus {
+					m.screenMode = ScreenBrowser
+					m.rebuildSidebar()
+					return m, nil
+				}
+			}
+			var chatCmd tea.Cmd
+			m.chatModel, chatCmd = m.chatModel.Update(msg)
+			if chatCmd != nil {
+				cmds = append(cmds, chatCmd)
 			}
 		} else if m.screenMode == ScreenDownloader && m.downloaderModel != nil {
 			switch msg.String() {
@@ -2491,6 +2537,12 @@ func (m *BrowserModel) View() string {
 			bodyView = m.logStreamerModel.ViewWithRegistry(totalWidth, bodyHeight, m.mouseReg)
 		} else {
 			bodyView = "\n  Log streamer unavailable."
+		}
+	case ScreenChat:
+		if m.chatModel != nil {
+			bodyView = m.chatModel.View(totalWidth, bodyHeight)
+		} else {
+			bodyView = "\n  Chat playground unavailable."
 		}
 	case ScreenBrowser:
 		fallthrough

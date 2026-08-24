@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the current semantic release version of Runora.
-const Version = "v2.1.2"
+const Version = "v2.2.0"
 
 // AppDataDir returns the fixed directory where runora stores all its data.
 // Each supported platform places data in its conventional location.
@@ -73,6 +73,7 @@ type Paths struct {
 	Cache            string   `json:"cache"`
 	Benchmarks       string   `json:"benchmarks"`
 	Downloads        string   `json:"downloads"`
+	Chats            string   `json:"chats,omitempty"`
 }
 
 // AllModelDirectories returns a deduplicated list of all configured model directory paths,
@@ -269,6 +270,9 @@ func LoadFromDir(dir string) (*Config, error) {
 	if cfg.Paths.Downloads == "" {
 		cfg.Paths.Downloads = defaults.Paths.Downloads
 	}
+	if cfg.Paths.Chats == "" {
+		cfg.Paths.Chats = defaults.Paths.Chats
+	}
 	if cfg.Paths.ModelDirectories == nil {
 		cfg.Paths.ModelDirectories = []string{}
 	}
@@ -357,6 +361,7 @@ func defaultConfig(dir string) *Config {
 			Cache:            filepath.Join(dir, "cache"),
 			Benchmarks:       filepath.Join(dir, "benchmarks"),
 			Downloads:        filepath.Join(dir, "downloads"),
+			Chats:            filepath.Join(dir, "chats"),
 		},
 		Favorites:           []string{},
 		RecentLaunches:      []string{},
@@ -408,6 +413,7 @@ func (c *Config) CreateDirectories() error {
 		c.Paths.Cache,
 		c.Paths.Benchmarks,
 		c.Paths.Downloads,
+		c.Paths.Chats,
 	}, c.Paths.ModelDirectories...)
 	for _, dir := range dirs {
 		if dir == "" {

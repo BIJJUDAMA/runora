@@ -1492,6 +1492,13 @@ func TestGlobalTopNavKeyRouting(t *testing.T) {
 		t.Errorf("expected key '6' to route to ScreenSettings, got %d", bm.screenMode)
 	}
 
+	// '7' -> ScreenChat
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7")})
+	bm = m.(*BrowserModel)
+	if bm.screenMode != ScreenChat {
+		t.Errorf("expected key '7' to route to ScreenChat, got %d", bm.screenMode)
+	}
+
 	// '1' -> ScreenBrowser
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
 	bm = m.(*BrowserModel)
@@ -1501,13 +1508,14 @@ func TestGlobalTopNavKeyRouting(t *testing.T) {
 
 	// 2. Test Forward Cycling with Tab:
 	// ScreenBrowser (0) -> ScreenDashboard (1) -> ScreenServerMonitor (2) ->
-	// ScreenDownloader (3) -> ScreenPerformanceDashboard (4) -> ScreenSettings (5) -> ScreenBrowser (0)
+	// ScreenDownloader (3) -> ScreenPerformanceDashboard (4) -> ScreenSettings (5) -> ScreenChat (6) -> ScreenBrowser (0)
 	expectedOrder := []ScreenMode{
 		ScreenDashboard,
 		ScreenServerMonitor,
 		ScreenDownloader,
 		ScreenPerformanceDashboard,
 		ScreenSettings,
+		ScreenChat,
 		ScreenBrowser,
 	}
 
@@ -1527,10 +1535,11 @@ func TestGlobalTopNavKeyRouting(t *testing.T) {
 	}
 
 	// 3. Test Backward Cycling with Shift+Tab:
-	// ScreenDashboard (1) -> ScreenBrowser (0) -> ScreenSettings (5) ->
+	// ScreenDashboard (1) -> ScreenBrowser (0) -> ScreenChat (6) -> ScreenSettings (5) ->
 	// ScreenPerformanceDashboard (4) -> ScreenDownloader (3) -> ScreenServerMonitor (2) -> ScreenDashboard (1)
 	expectedBackOrder := []ScreenMode{
 		ScreenBrowser,
+		ScreenChat,
 		ScreenSettings,
 		ScreenPerformanceDashboard,
 		ScreenDownloader,
@@ -2269,5 +2278,31 @@ func TestMouseAndKeyboardInteroperability(t *testing.T) {
 	bm = m.(*BrowserModel)
 	if bm.screenMode != ScreenBrowser {
 		t.Fatalf("expected screenMode ScreenBrowser after keyboard '1' press, got %v", bm.screenMode)
+	}
+}
+
+func TestChatTabNavigationAndScreenRendering(t *testing.T) {
+	ApplyTheme("forest")
+	cfg := config.DefaultConfig()
+	srv := runner.NewMultiRuntimeManager("")
+	bm := NewBrowserModel(cfg, srv)
+	bm.loading = false
+	bm.onboardingActive = false
+	bm.llamaCPPMissingActive = false
+
+	// Navigate to ScreenChat via key '7'
+	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7")})
+	bm = m.(*BrowserModel)
+
+	if bm.screenMode != ScreenChat {
+		t.Fatalf("expected screenMode ScreenChat, got %v", bm.screenMode)
+	}
+
+	view := bm.View()
+	if !strings.Contains(view, "[7] Chat") {
+		t.Errorf("expected global header to render '[7] Chat' tab")
+	}
+	if !strings.Contains(view, "Sessions") {
+		t.Errorf("expected Chat view to render 'Sessions' card")
 	}
 }

@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-08-24
+
+### Added
+- Integrated Terminal Chat Playground accessible via top navigation tab `[7] Chat` and number key `7`.
+- Real-time token streaming with live speed telemetry (tokens/sec), prompt token evaluation, and generated token counting over Server-Sent Events (SSE).
+- 3-layer hybrid context compaction engine:
+  - Layer 1: System prompt (never compacted).
+  - Layer 2: Compaction Checkpoints summary stack.
+  - Layer 3: Recent verbatim tail with 20% context window budget protection.
+- On-demand (`[K]`) and automatic (above 85% context pressure) history compaction with full verbatim message preservation in `OriginalMessages`.
+- Multiple persistent named chat sessions saved atomically under `{appDataDir}/chats/` with create (`[N]`), delete (`[D]`), and rename (`[R]`) actions.
+- Dynamic Generation Parameters overlay (`[P]`) for live tuning of Temperature, Top-P, Top-K, and Context Size.
+- Inline Model Launcher card when accessing chat without an active server instance.
+- Clipboard copy shortcut (`[C]`) for instantaneous assistant response extraction.
+- Multiline prompt editing support via `textarea` component (`Enter` to send, `Ctrl+Enter` for newlines).
+
 ## [2.1.2] - 2026-08-24
 
 ### Fixed

@@ -335,6 +335,10 @@ func TestModelDirectories(t *testing.T) {
 }
 
 func TestConfigAPITokens(t *testing.T) {
+	credentials.MockInit()
+	_ = credentials.Delete(credentials.ProviderGitHub)
+	_ = credentials.Delete(credentials.ProviderHuggingFace)
+
 	// Test environment variable detection in defaultConfig
 	t.Run("EnvVarDetection", func(t *testing.T) {
 		t.Setenv("GITHUB_TOKEN", "ghp_env_test_1")
