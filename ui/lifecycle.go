@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -268,20 +267,62 @@ type appUpdateMsg struct {
 	msg string
 }
 
-// StartAppUpdate runs go install to update the app.
+// StartAppUpdate downloads the latest Runora release from GitHub or falls back to go install.
 func (m *LifecycleModel) StartAppUpdate() tea.Cmd {
 	m.appUpdating = true
 	m.appUpdateErr = nil
 	m.appUpdateSuccess = false
 	m.updatingRuntime = "app"
-	return func() tea.Msg {
-		cmd := exec.Command("go", "install", "github.com/BIJJUDAMA/runora/cmd/runora@latest")
-		output, err := cmd.CombinedOutput()
+	m.state = StateDownloading
+
+	ch := make(chan updateMsg, 20)
+
+	go func() {
+		defer close(ch)
+
+		ch <- updateMsg{target: "app", state: StateChecking, msg: "Checking latest Runora release...", ch: ch}
+
+		rel, err := runner.CheckAppRelease()
 		if err != nil {
-			return appUpdateMsg{err: fmt.Errorf("failed to run go install: %w (output: %s)", err, string(output))}
+			ch <- updateMsg{target: "app", state: StateError, err: fmt.Errorf("failed to check release: %w", err), ch: ch}
+			return
 		}
-		return appUpdateMsg{msg: "Update successful! Please restart the application."}
-	}
+
+		progressChan := make(chan float64, 10)
+		doneChan := make(chan struct {
+			msg string
+			err error
+		}, 1)
+
+		go func() {
+			msg, err := runner.DownloadAndInstallApp(rel, m.config.Paths.Downloads, progressChan)
+			doneChan <- struct {
+				msg string
+				err error
+			}{msg: msg, err: err}
+		}()
+
+		for p := range progressChan {
+			ch <- updateMsg{
+				target:   "app",
+				state:    StateDownloading,
+				progress: p,
+				msg:      fmt.Sprintf("Downloading Runora %s (%.1f%%)...", rel.TagName, p*100.0),
+				release:  rel,
+				ch:       ch,
+			}
+		}
+
+		res := <-doneChan
+		if res.err != nil {
+			ch <- updateMsg{target: "app", state: StateError, err: res.err, release: rel, ch: ch}
+			return
+		}
+
+		ch <- updateMsg{target: "app", state: StateUpdateSuccess, msg: res.msg, release: rel, ch: ch}
+	}()
+
+	return m.ReadUpdateChan(ch)
 }
 
 func (m *LifecycleModel) RefreshLocalVersion() {
@@ -612,12 +653,19 @@ func (m *LifecycleModel) StartOnnxRollback() tea.Cmd {
 // StartCheckSelected checks updates for the currently focused runtime component.
 func (m *LifecycleModel) StartCheckSelected() tea.Cmd {
 	switch m.SelectedRuntime {
-	case 1: // ONNX
+	case 1: // llama.cpp
+		m.updatingRuntime = "llamacpp"
+		return m.StartCheckOnly()
+	case 2: // ONNX
 		m.updatingRuntime = "onnx"
 		return m.StartOnnxCheckOnly()
-	case 2: // App
+	case 3: // App
 		m.updatingRuntime = "app"
 		return m.StartAppCheck()
+	case 4: // Model Sources
+		m.RefreshModelSources()
+		m.actionMsg = "Model sources rescanned."
+		return nil
 	default: // llama.cpp
 		m.updatingRuntime = "llamacpp"
 		return m.StartCheckOnly()
@@ -627,12 +675,24 @@ func (m *LifecycleModel) StartCheckSelected() tea.Cmd {
 // StartUpdateSelected downloads and updates the currently focused runtime component.
 func (m *LifecycleModel) StartUpdateSelected() tea.Cmd {
 	switch m.SelectedRuntime {
-	case 1: // ONNX
+	case 1: // llama.cpp
+		m.updatingRuntime = "llamacpp"
+		return m.StartUpdate()
+	case 2: // ONNX
 		m.updatingRuntime = "onnx"
 		return m.StartOnnxUpdate()
-	case 2: // App
+	case 3: // App
 		m.updatingRuntime = "app"
 		return m.StartAppUpdate()
+	case 4: // Model Sources
+		if len(m.config.ModelSources) > 0 {
+			if m.sourceFocus < 0 || m.sourceFocus >= len(m.config.ModelSources) {
+				m.sourceFocus = 0
+			}
+			m.config.ModelSources[m.sourceFocus].Enabled = !m.config.ModelSources[m.sourceFocus].Enabled
+			_ = m.config.Save()
+		}
+		return nil
 	default: // llama.cpp
 		m.updatingRuntime = "llamacpp"
 		return m.StartUpdate()

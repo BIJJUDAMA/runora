@@ -700,3 +700,41 @@ func TestDriverWithVersionTag(t *testing.T) {
 		t.Errorf("expected cmd path to target version slot b9999, got %s", cmd.Path)
 	}
 }
+
+func TestMatchAppAssetAcrossPlatforms(t *testing.T) {
+	rel := &GithubRelease{
+		TagName: "v2.1.0",
+		Assets: []ReleaseAsset{
+			{Name: "runora-windows-amd64.zip", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-windows-amd64.zip"},
+			{Name: "runora-windows-arm64.zip", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-windows-arm64.zip"},
+			{Name: "runora-darwin-arm64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-darwin-arm64.tar.gz"},
+			{Name: "runora-darwin-amd64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-darwin-amd64.tar.gz"},
+			{Name: "runora-linux-amd64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-linux-amd64.tar.gz"},
+			{Name: "runora-linux-arm64.tar.gz", BrowserDownloadURL: "https://github.com/BIJJUDAMA/runora/releases/download/v2.1.0/runora-linux-arm64.tar.gz"},
+		},
+	}
+
+	asset, err := MatchAppAsset(rel)
+	if err != nil {
+		t.Fatalf("MatchAppAsset failed for current platform (%s-%s): %v", runtime.GOOS, runtime.GOARCH, err)
+	}
+	if asset == nil {
+		t.Fatalf("expected matched asset, got nil")
+	}
+
+	// Verify asset matches current OS
+	switch runtime.GOOS {
+	case "windows":
+		if !strings.Contains(asset.Name, "windows") {
+			t.Errorf("expected windows asset, got %s", asset.Name)
+		}
+	case "darwin":
+		if !strings.Contains(asset.Name, "darwin") && !strings.Contains(asset.Name, "macos") {
+			t.Errorf("expected darwin/macos asset, got %s", asset.Name)
+		}
+	case "linux":
+		if !strings.Contains(asset.Name, "linux") {
+			t.Errorf("expected linux asset, got %s", asset.Name)
+		}
+	}
+}

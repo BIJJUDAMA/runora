@@ -1445,13 +1445,13 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "o", "O":
 				if m.lifecycleModel.state != StateChecking && m.lifecycleModel.state != StateDownloading && m.lifecycleModel.state != StateExtracting && m.lifecycleModel.state != StateVerifying && m.lifecycleModel.state != StateRollingBack {
-					m.lifecycleModel.SelectedRuntime = 1
+					m.lifecycleModel.SelectedRuntime = 2
 					m.lifecycleModel.updatingRuntime = "onnx"
 					cmds = append(cmds, m.lifecycleModel.StartOnnxUpdate())
 				}
 			case "a", "A":
 				if m.lifecycleModel.appLatestTag != "" && m.lifecycleModel.appLatestTag != m.lifecycleModel.appVersion && !m.lifecycleModel.appUpdating {
-					m.lifecycleModel.SelectedRuntime = 2
+					m.lifecycleModel.SelectedRuntime = 3
 					cmds = append(cmds, m.lifecycleModel.StartAppUpdate())
 				}
 			case "y", "Y":

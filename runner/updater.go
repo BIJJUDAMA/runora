@@ -1435,3 +1435,208 @@ func InstallOnnxVersionSlot(archivePath string, onnxDir string, versionTag strin
 	_ = os.WriteFile(filepath.Join(slotDir, "version.txt"), []byte(versionTag), 0644)
 	return SwitchActiveOnnxVersion(onnxDir, versionTag)
 }
+
+// MatchAppAsset finds the precompiled binary release asset corresponding to the current platform.
+func MatchAppAsset(release *GithubRelease) (*ReleaseAsset, error) {
+	if release == nil || len(release.Assets) == 0 {
+		return nil, fmt.Errorf("release contains no downloadable assets")
+	}
+
+	targetOS := runtime.GOOS     // "windows", "darwin", "linux"
+	targetArch := runtime.GOARCH // "amd64", "arm64", "386"
+
+	var osTokens []string
+	switch targetOS {
+	case "windows":
+		osTokens = []string{"windows", "win", ".exe"}
+	case "darwin":
+		osTokens = []string{"darwin", "macos", "osx", "apple"}
+	case "linux":
+		osTokens = []string{"linux"}
+	}
+
+	var archTokens []string
+	switch targetArch {
+	case "amd64":
+		archTokens = []string{"amd64", "x86_64", "x64", "64bit"}
+	case "arm64":
+		archTokens = []string{"arm64", "aarch64"}
+	}
+
+	var bestAsset *ReleaseAsset
+	bestScore := -1
+
+	for i := range release.Assets {
+		asset := &release.Assets[i]
+		nameLower := strings.ToLower(asset.Name)
+
+		hasAppName := strings.Contains(nameLower, "runora") || strings.Contains(nameLower, "llama-manager")
+		if !hasAppName && len(release.Assets) > 2 {
+			continue
+		}
+
+		score := 0
+		if hasAppName {
+			score += 10
+		}
+
+		matchedOS := false
+		for _, tok := range osTokens {
+			if strings.Contains(nameLower, tok) {
+				matchedOS = true
+				score += 20
+				break
+			}
+		}
+		if !matchedOS {
+			continue
+		}
+
+		matchedArch := false
+		for _, tok := range archTokens {
+			if strings.Contains(nameLower, tok) {
+				matchedArch = true
+				score += 20
+				break
+			}
+		}
+		if !matchedArch && targetArch == "amd64" && !strings.Contains(nameLower, "arm") && !strings.Contains(nameLower, "aarch64") {
+			matchedArch = true
+			score += 10
+		}
+		if !matchedArch {
+			continue
+		}
+
+		if strings.HasSuffix(nameLower, ".zip") || strings.HasSuffix(nameLower, ".tar.gz") || strings.HasSuffix(nameLower, ".tgz") || strings.HasSuffix(nameLower, ".exe") {
+			score += 5
+		}
+
+		if score > bestScore {
+			bestScore = score
+			bestAsset = asset
+		}
+	}
+
+	if bestAsset != nil {
+		return bestAsset, nil
+	}
+
+	return nil, fmt.Errorf("no precompiled release asset found for %s-%s in release %s", targetOS, targetArch, release.TagName)
+}
+
+// DownloadAndInstallApp downloads the matching release asset from GitHub or falls back to go install.
+func DownloadAndInstallApp(release *GithubRelease, downloadsDir string, progressChan chan float64) (string, error) {
+	if downloadsDir == "" {
+		downloadsDir = os.TempDir()
+	}
+	_ = os.MkdirAll(downloadsDir, 0755)
+
+	asset, err := MatchAppAsset(release)
+	if err != nil {
+		// Fallback to go install if go toolchain is present
+		if _, lookErr := exec.LookPath("go"); lookErr == nil {
+			cmd := exec.Command("go", "install", "github.com/BIJJUDAMA/runora/cmd/runora@latest")
+			output, goErr := cmd.CombinedOutput()
+			if goErr != nil {
+				return "", fmt.Errorf("go install failed: %w (output: %s)", goErr, string(output))
+			}
+			return "Upgraded successfully via go install! Please restart Runora.", nil
+		}
+		return "", fmt.Errorf("could not match release asset: %w", err)
+	}
+
+	// 1. Download asset into temporary directory
+	destFile := filepath.Join(downloadsDir, asset.Name)
+	if err := DownloadRelease(asset.BrowserDownloadURL, destFile, progressChan); err != nil {
+		return "", fmt.Errorf("failed to download release asset: %w", err)
+	}
+
+	// 2. Extract or locate binary
+	extractDir := filepath.Join(downloadsDir, "app-update-extracted")
+	_ = os.RemoveAll(extractDir)
+	_ = os.MkdirAll(extractDir, 0755)
+	defer os.RemoveAll(extractDir)
+
+	exeName := "runora"
+	if runtime.GOOS == "windows" {
+		exeName = "runora.exe"
+	}
+
+	var newBinaryPath string
+	lowerName := strings.ToLower(asset.Name)
+
+	if strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar.gz") || strings.HasSuffix(lowerName, ".tgz") {
+		if err := ExtractArchive(destFile, extractDir); err != nil {
+			return "", fmt.Errorf("failed to extract release archive: %w", err)
+		}
+		// Search extracted directory for runora binary
+		_ = filepath.WalkDir(extractDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil || d.IsDir() {
+				return nil
+			}
+			base := strings.ToLower(d.Name())
+			if base == exeName || strings.HasPrefix(base, "runora") || strings.HasPrefix(base, "llama-manager") {
+				newBinaryPath = path
+			}
+			return nil
+		})
+	} else {
+		// Standalone raw executable
+		newBinaryPath = destFile
+	}
+
+	if newBinaryPath == "" {
+		return "", fmt.Errorf("could not locate executable %s inside downloaded package", exeName)
+	}
+
+	// 3. Resolve current running executable location
+	currExe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve current executable path: %w", err)
+	}
+	currExe, err = filepath.EvalSymlinks(currExe)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve symlink for executable path: %w", err)
+	}
+
+	currDir := filepath.Dir(currExe)
+	targetExe := filepath.Join(currDir, exeName)
+
+	// 4. Perform atomic swap / rename replacement
+	if runtime.GOOS == "windows" {
+		oldExe := targetExe + ".old"
+		_ = os.Remove(oldExe)
+		if err := os.Rename(targetExe, oldExe); err != nil {
+			oldExe = currExe + ".old"
+			_ = os.Remove(oldExe)
+			_ = os.Rename(currExe, oldExe)
+		}
+
+		data, err := os.ReadFile(newBinaryPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read new binary: %w", err)
+		}
+		if err := os.WriteFile(targetExe, data, 0755); err != nil {
+			return "", fmt.Errorf("failed to write upgraded binary to %s: %w", targetExe, err)
+		}
+	} else {
+		data, err := os.ReadFile(newBinaryPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read new binary: %w", err)
+		}
+		tmpExe := targetExe + ".tmp"
+		if err := os.WriteFile(tmpExe, data, 0755); err != nil {
+			return "", fmt.Errorf("failed to write temporary binary: %w", err)
+		}
+		if err := os.Rename(tmpExe, targetExe); err != nil {
+			return "", fmt.Errorf("failed to replace binary: %w", err)
+		}
+	}
+
+	tagName := release.TagName
+	if tagName == "" {
+		tagName = "latest"
+	}
+	return fmt.Sprintf("Successfully upgraded Runora to %s! Please restart the application.", tagName), nil
+}
