@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] - 2026-08-24
+
+### Added
+- Added smart running GGUF model auto-detection and instance binding in Chat Playground.
+- Added dedicated "No GGUF Server Running" guidance card with direct one-key navigation (`[2]` or `[Enter]`) to the Launch tab.
+- Added interactive multi-instance model selector card when multiple GGUF servers are running.
+- Added `[M]` model switcher hotkey in Chat to switch between active running GGUF server instances.
+- Restricted Chat Playground strictly to GGUF model runtimes (filtering out non-chat ONNX engines).
+
 ## [2.1.3] - 2026-08-24
 
 ### Added
