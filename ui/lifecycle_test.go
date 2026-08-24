@@ -136,7 +136,67 @@ func TestBentoLifecycleSettingsLayout(t *testing.T) {
 		t.Errorf("expected app view to contain 'Runora CLI Version:', got:\n%s", appView)
 	}
 
-	// 6. Test Token Edit Mode
+	// 6. Switch to Section 4 (External Model Sources Inspector)
+	model.SelectedRuntime = 4
+	model.config.ModelSources = []config.ModelSource{
+		{
+			Type:         "ollama",
+			Name:         "Ollama",
+			Enabled:      true,
+			Detected:     true,
+			DetectedPath: "/home/user/.ollama/models",
+			ModelCount:   5,
+		},
+		{
+			Type:         "lmstudio",
+			Name:         "LM Studio",
+			Enabled:      false,
+			Detected:     false,
+			DetectedPath: "",
+			ModelCount:   0,
+		},
+	}
+	srcView := model.View(100, 40)
+	if h := lipgloss.Height(srcView); h != 40 {
+		t.Errorf("expected srcView height to match cardHeight 40, got %d", h)
+	}
+	if !strings.Contains(srcView, "External Model Sources") {
+		t.Errorf("expected view to contain 'External Model Sources', got:\n%s", srcView)
+	}
+	if !strings.Contains(srcView, "Ollama") {
+		t.Errorf("expected view to contain 'Ollama', got:\n%s", srcView)
+	}
+	if !strings.Contains(srcView, "LM Studio") {
+		t.Errorf("expected view to contain 'LM Studio', got:\n%s", srcView)
+	}
+	if !strings.Contains(srcView, "5 models") {
+		t.Errorf("expected view to contain '5 models', got:\n%s", srcView)
+	}
+	if !strings.Contains(srcView, "[✓ Detected]") {
+		t.Errorf("expected view to contain '[✓ Detected]', got:\n%s", srcView)
+	}
+	if !strings.Contains(srcView, "[✗ Not Found]") {
+		t.Errorf("expected view to contain '[✗ Not Found]', got:\n%s", srcView)
+	}
+
+	// Test toggling source via Space
+	model.sourceFocus = 0
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if model.config.ModelSources[0].Enabled != false {
+		t.Errorf("expected Ollama source enabled to toggle to false")
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if model.config.ModelSources[0].Enabled != true {
+		t.Errorf("expected Ollama source enabled to toggle back to true")
+	}
+
+	for _, r := range srcView {
+		if isEmoji(r) {
+			t.Errorf("LifecycleModel.View in model sources contains emoji %q in output", string(r))
+		}
+	}
+
+	// 7. Test Token Edit Mode
 	// Enter token edit mode via key 'g'
 	model.SelectedRuntime = 0
 	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})

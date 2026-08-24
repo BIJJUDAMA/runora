@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +16,7 @@ import (
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
+	"github.com/BIJJUDAMA/runora/internal/discovery"
 	"github.com/BIJJUDAMA/runora/runner"
 	"github.com/BIJJUDAMA/runora/ui/mouse"
 )
@@ -72,6 +74,7 @@ type LifecycleModel struct {
 	tokenInput       textinput.Model
 	tokenEditActive  bool
 	tokenEditTarget  string // "hf" or "github"
+	sourceFocus      int
 	// App self-update fields
 	appVersion       string
 	appLatestTag     string
@@ -139,7 +142,35 @@ func NewLifecycleModel(cfg *config.Config, srv runner.ModelRuntime) *LifecycleMo
 	m.RefreshLocalVersion()
 	m.RefreshBackupStatus()
 	m.RefreshVersionSlots()
+	m.RefreshModelSources()
 	return m
+}
+
+func (m *LifecycleModel) RefreshModelSources() {
+	if len(m.config.ModelSources) == 0 {
+		m.config.ModelSources = config.DetectDefaultModelSources()
+	}
+
+	importer := discovery.NewImporter()
+	for i := range m.config.ModelSources {
+		src := &m.config.ModelSources[i]
+		if src.DetectedPath == "" && src.CustomPath == "" {
+			continue
+		}
+		models, err := importer.ScanSource(&discovery.SourceConfig{
+			Type:         discovery.SourceType(src.Type),
+			Name:         src.Name,
+			Enabled:      src.Enabled,
+			CustomPath:   src.CustomPath,
+			DetectedPath: src.DetectedPath,
+		})
+		if err == nil {
+			src.ModelCount = len(models)
+			src.Detected = true
+			src.LastScanTime = time.Now()
+		}
+	}
+	_ = m.config.Save()
 }
 
 func (m *LifecycleModel) ToggleChannel() {
@@ -610,23 +641,34 @@ func (m *LifecycleModel) StartUpdateSelected() tea.Cmd {
 
 // StartRollbackSelected rolls back the currently focused runtime component.
 func (m *LifecycleModel) NextRuntime() {
-	m.SelectedRuntime = (m.SelectedRuntime + 1) % 4
+	m.SelectedRuntime = (m.SelectedRuntime + 1) % 5
+	if m.SelectedRuntime == 4 {
+		m.RefreshModelSources()
+	}
 }
 
 func (m *LifecycleModel) PrevRuntime() {
-	m.SelectedRuntime = (m.SelectedRuntime + 3) % 4
+	m.SelectedRuntime = (m.SelectedRuntime + 4) % 5
+	if m.SelectedRuntime == 4 {
+		m.RefreshModelSources()
+	}
 }
 
 func (m *LifecycleModel) StartRollbackSelected() tea.Cmd {
 	switch m.SelectedRuntime {
-	case 1: // ONNX
+	case 1: // llama.cpp
+		if m.hasLlamaBackup {
+			m.updatingRuntime = "llamacpp"
+			return m.StartRollback()
+		}
+	case 2: // ONNX
 		if m.hasOnnxBackup {
 			m.updatingRuntime = "onnx"
 			return m.StartOnnxRollback()
 		}
-	case 2: // App
+	case 3: // App
 		return nil
-	default: // llama.cpp
+	default:
 		if m.hasLlamaBackup {
 			m.updatingRuntime = "llamacpp"
 			return m.StartRollback()
@@ -685,9 +727,23 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			m.PrevRuntime()
+			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
+				m.sourceFocus--
+				if m.sourceFocus < 0 {
+					m.sourceFocus = len(m.config.ModelSources) - 1
+				}
+			} else {
+				m.PrevRuntime()
+			}
 		case "down", "j":
-			m.NextRuntime()
+			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
+				m.sourceFocus++
+				if m.sourceFocus >= len(m.config.ModelSources) {
+					m.sourceFocus = 0
+				}
+			} else {
+				m.NextRuntime()
+			}
 		case "g", "G":
 			m.SelectedRuntime = 0
 			m.tokenEditActive = true
@@ -719,6 +775,21 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "r", "R":
+			if m.SelectedRuntime == 4 {
+				m.RefreshModelSources()
+				m.actionMsg = "Model sources rescanned."
+			}
+			return m, nil
+		case "space", " ", "enter":
+			if m.SelectedRuntime == 4 && len(m.config.ModelSources) > 0 {
+				if m.sourceFocus < 0 || m.sourceFocus >= len(m.config.ModelSources) {
+					m.sourceFocus = 0
+				}
+				m.config.ModelSources[m.sourceFocus].Enabled = !m.config.ModelSources[m.sourceFocus].Enabled
+				_ = m.config.Save()
+			}
+			return m, nil
 		case "1":
 			m.SelectedRuntime = 0
 			return m, nil
@@ -730,6 +801,10 @@ func (m *LifecycleModel) Update(msg tea.Msg) (*LifecycleModel, tea.Cmd) {
 			return m, nil
 		case "4":
 			m.SelectedRuntime = 3
+			return m, nil
+		case "5":
+			m.SelectedRuntime = 4
+			m.RefreshModelSources()
 			return m, nil
 		}
 
@@ -849,6 +924,7 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		{1, "llama.cpp"},
 		{2, "ONNX Runtime"},
 		{3, "Runora App"},
+		{4, "Model Sources"},
 	}
 
 	for i, s := range sections {
@@ -1033,7 +1109,7 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		onnxContent := strings.TrimRight(onnxSB.String(), "\n")
 		rightCard = SurfaceCardWithHeight("ONNX Runtime Inspector", onnxContent, rightWidth, cardHeight, true, "ONNX")
 
-	} else {
+	} else if m.SelectedRuntime == 3 {
 		// Runora App & Tools Inspector
 		var appSB strings.Builder
 		appVerStr := lipgloss.NewStyle().Foreground(ColorWhite).Render(m.appVersion)
@@ -1062,6 +1138,72 @@ func (m *LifecycleModel) ViewWithRegistry(width int, height int, reg *mouse.Regi
 		appSB.WriteString(fmt.Sprintf("  Actions: %s Self-Update App  │  %s Themes  │  %s Welcome Tour\n", StyleHelpKey.Render("[Enter/A]"), StyleHelpKey.Render("[Y]"), StyleHelpKey.Render("[N]")))
 		appContent := strings.TrimRight(appSB.String(), "\n")
 		rightCard = SurfaceCardWithHeight("Runora System & Tools Inspector", appContent, rightWidth, cardHeight, true, "System")
+
+	} else {
+		// Model Sources Inspector (SelectedRuntime == 4)
+		var srcSB strings.Builder
+		srcSB.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextDim).Render("Automatically import existing models from Ollama and LM Studio libraries:") + "\n\n")
+
+		totalImported := 0
+		for i, src := range m.config.ModelSources {
+			totalImported += src.ModelCount
+
+			statusBadge := lipgloss.NewStyle().Foreground(ColorMuted).Render("[✗ Not Found]")
+			if src.Detected {
+				statusBadge = StyleSuccess.Render("[✓ Detected]")
+			}
+
+			enabledPill := "[ ] Disabled"
+			if src.Enabled {
+				enabledPill = "[x] Enabled "
+			}
+
+			rowTitle := fmt.Sprintf("[%d] %-12s %s  %s", i+1, src.Name, enabledPill, statusBadge)
+			if i == m.sourceFocus {
+				srcSB.WriteString("  " + lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(rowTitle) + "\n")
+			} else {
+				srcSB.WriteString("  " + lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(rowTitle) + "\n")
+			}
+
+			pathDisplay := src.DetectedPath
+			if src.CustomPath != "" {
+				pathDisplay = src.CustomPath
+			}
+			if pathDisplay == "" {
+				pathDisplay = "(Default location not found)"
+			}
+
+			srcSB.WriteString(fmt.Sprintf("      %-16s %s\n", "Library Path:", TruncateVisual(pathDisplay, max(24, rightWidth-24), "...")))
+			srcSB.WriteString(fmt.Sprintf("      %-16s %d models\n", "Imported Models:", src.ModelCount))
+			if !src.LastScanTime.IsZero() {
+				srcSB.WriteString(fmt.Sprintf("      %-16s %s\n\n", "Last Scan Time:", src.LastScanTime.Format("2006-01-02 15:04:05")))
+			} else {
+				srcSB.WriteString("\n")
+			}
+
+			if reg != nil {
+				targetSrcIdx := i
+				reg.Register(mouse.Region{
+					ID:     fmt.Sprintf("settings-modelsource-%d", targetSrcIdx),
+					Bounds: mouse.Rect{X: leftWidth + 2, Y: 5 + i*4, W: rightWidth - 4, H: 3},
+					ZIndex: 1,
+					OnClick: func(msg tea.MouseMsg) tea.Cmd {
+						m.sourceFocus = targetSrcIdx
+						m.config.ModelSources[targetSrcIdx].Enabled = !m.config.ModelSources[targetSrcIdx].Enabled
+						_ = m.config.Save()
+						return nil
+					},
+				})
+			}
+		}
+
+		srcSB.WriteString("  ──────────────────────────────────────────────────────────────────────────\n")
+		srcSB.WriteString(fmt.Sprintf("  Total Discovered External Models: %d\n\n", totalImported))
+		srcSB.WriteString(fmt.Sprintf("  Actions: %s Toggle Source  │  %s Rescan Sources\n", StyleHelpKey.Render("[Space/Enter]"), StyleHelpKey.Render("[R]")))
+
+		srcContent := strings.TrimRight(srcSB.String(), "\n")
+		badge := fmt.Sprintf("%d Models", totalImported)
+		rightCard = SurfaceCardWithHeight("External Model Sources", srcContent, rightWidth, cardHeight, true, badge)
 	}
 
 	// Join Left & Right Columns side by side

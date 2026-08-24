@@ -592,11 +592,11 @@ func TestBrowserOnboardingTour(t *testing.T) {
 		t.Errorf("expected onboarding to start at StepWelcome, got %d", bm.onboardingStep)
 	}
 
-	// Press Enter to advance to StepStorage
+	// Press Enter to advance to StepModelSources
 	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
-	if bm.onboardingStep != StepStorage {
-		t.Errorf("expected onboarding to advance to StepStorage, got %d", bm.onboardingStep)
+	if bm.onboardingStep != StepModelSources {
+		t.Errorf("expected onboarding to advance to StepModelSources, got %d", bm.onboardingStep)
 	}
 
 	// Press 'b' to go back
@@ -606,7 +606,9 @@ func TestBrowserOnboardingTour(t *testing.T) {
 		t.Errorf("expected onboarding to go back to StepWelcome, got %d", bm.onboardingStep)
 	}
 
-	// Advance to StepTokens (Welcome -> Storage -> Tokens)
+	// Advance to StepTokens (Welcome -> ModelSources -> Storage -> Tokens)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -725,19 +727,37 @@ func TestOnboardingWizardFlowWide(t *testing.T) {
 	}
 	assertZeroEmojis("StepWelcome", bm.onboardingOverlayView(120, 36))
 
-	// Advance to Step 2: StepStorage
+	// Advance to Step 2: StepModelSources
 	m, _ := bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
+	if bm.onboardingStep != StepModelSources {
+		t.Fatalf("expected StepModelSources (1), got %v", bm.onboardingStep)
+	}
+	assertZeroEmojis("StepModelSources", bm.onboardingOverlayView(120, 36))
+
+	// Test toggling source on StepModelSources with '1'
+	if len(bm.onboardingSources) > 0 {
+		initialState := bm.onboardingSources[0].Enabled
+		m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+		bm = m.(*BrowserModel)
+		if bm.onboardingSources[0].Enabled == initialState {
+			t.Errorf("expected source 0 enabled state to toggle")
+		}
+	}
+
+	// Advance to Step 3: StepStorage
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	bm = m.(*BrowserModel)
 	if bm.onboardingStep != StepStorage {
-		t.Fatalf("expected StepStorage (1), got %v", bm.onboardingStep)
+		t.Fatalf("expected StepStorage (2), got %v", bm.onboardingStep)
 	}
 	assertZeroEmojis("StepStorage", bm.onboardingOverlayView(120, 36))
 
-	// Advance to Step 3: StepTokens
+	// Advance to Step 4: StepTokens
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
 	if bm.onboardingStep != StepTokens {
-		t.Fatalf("expected StepTokens (2), got %v", bm.onboardingStep)
+		t.Fatalf("expected StepTokens (3), got %v", bm.onboardingStep)
 	}
 	assertZeroEmojis("StepTokens", bm.onboardingOverlayView(120, 36))
 
@@ -786,9 +806,9 @@ func TestOnboardingWizardFlowWide(t *testing.T) {
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
 
-	// Step 4: StepRuntime
+	// Step 5: StepRuntime
 	if bm.onboardingStep != StepRuntime {
-		t.Fatalf("expected StepRuntime (3), got %v", bm.onboardingStep)
+		t.Fatalf("expected StepRuntime (4), got %v", bm.onboardingStep)
 	}
 	assertZeroEmojis("StepRuntime", bm.onboardingOverlayView(120, 36))
 
@@ -816,11 +836,11 @@ func TestOnboardingWizardFlowWide(t *testing.T) {
 		t.Errorf("expected backend to change after pressing 'a'")
 	}
 
-	// Advance to Step 5: StepFinished
+	// Advance to Step 6: StepFinished
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	bm = m.(*BrowserModel)
 	if bm.onboardingStep != StepFinished {
-		t.Fatalf("expected StepFinished (4), got %v", bm.onboardingStep)
+		t.Fatalf("expected StepFinished (5), got %v", bm.onboardingStep)
 	}
 	assertZeroEmojis("StepFinished", bm.onboardingOverlayView(120, 36))
 
@@ -969,6 +989,13 @@ func TestUnifiedLifecycleNavigation(t *testing.T) {
 		t.Errorf("expected SelectedRuntime to be 3 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
+	// Press Down to cycle to Model Sources (4)
+	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	bm = m.(*BrowserModel)
+	if bm.lifecycleModel.SelectedRuntime != 4 {
+		t.Errorf("expected SelectedRuntime to be 4 after Down, got %d", bm.lifecycleModel.SelectedRuntime)
+	}
+
 	// Press Down again to wrap back to API Credentials (0)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	bm = m.(*BrowserModel)
@@ -976,11 +1003,11 @@ func TestUnifiedLifecycleNavigation(t *testing.T) {
 		t.Errorf("expected SelectedRuntime to wrap to 0, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 
-	// Press Up arrow to move backwards to Runora App (3)
+	// Press Up arrow to move backwards to Model Sources (4)
 	m, _ = bm.Update(tea.KeyMsg{Type: tea.KeyUp})
 	bm = m.(*BrowserModel)
-	if bm.lifecycleModel.SelectedRuntime != 3 {
-		t.Errorf("expected SelectedRuntime to be 3 after Up arrow, got %d", bm.lifecycleModel.SelectedRuntime)
+	if bm.lifecycleModel.SelectedRuntime != 4 {
+		t.Errorf("expected SelectedRuntime to be 4 after Up arrow, got %d", bm.lifecycleModel.SelectedRuntime)
 	}
 }
 

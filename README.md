@@ -173,10 +173,11 @@ Flags:
 
 ### [6] Settings Screen
 
-- `1` / `2` / `3` / `4`: Select component (1: API Tokens, 2: llama.cpp, 3: ONNX Runtime, 4: Runora App).
+- `1` / `2` / `3` / `4` / `5`: Select component (1: API Tokens, 2: llama.cpp, 3: ONNX Runtime, 4: Runora App, 5: Model Sources).
 - `C` / `Enter`: Check for runtime/application updates.
 - `U` / `Space`: Download and install update slot.
-- `R`: Roll back selected component to backup.
+- `R`: Roll back selected component to backup or rescan external model sources.
+- `Space`: Toggle enabled status for selected external model source.
 - `E`: Edit API tokens (GitHub / Hugging Face).
 - `S`: Save updated API tokens.
 

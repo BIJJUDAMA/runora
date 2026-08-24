@@ -18,6 +18,7 @@ import (
 	"github.com/BIJJUDAMA/runora/config"
 	"github.com/BIJJUDAMA/runora/credentials"
 	"github.com/BIJJUDAMA/runora/hardware"
+	"github.com/BIJJUDAMA/runora/internal/discovery"
 	"github.com/BIJJUDAMA/runora/model"
 	"github.com/BIJJUDAMA/runora/profile"
 	"github.com/BIJJUDAMA/runora/runner"
@@ -51,6 +52,7 @@ type OnboardingStep int
 
 const (
 	StepWelcome OnboardingStep = iota
+	StepModelSources
 	StepStorage
 	StepTokens
 	StepRuntime
@@ -110,6 +112,8 @@ type BrowserModel struct {
 	onboardingBackend     runner.BackendType
 	onboardingBackendIdx  int
 	onboardingBackends    []runner.BackendType
+	onboardingSources     []config.ModelSource
+	onboardingSourceFocus int
 	focusRight            bool
 	llamaCPPMissingActive bool
 	toasts                *ToastManager
@@ -126,55 +130,70 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 
 	ghTokenTi := textinput.New()
 	ghTokenTi.Placeholder = "Enter GitHub Token (optional)..."
-	ghTokenTi.CharLimit = 128
-	ghTokenTi.Width = 48
+	ghTokenTi.CharLimit = 156
+	ghTokenTi.Width = 40
 	ghTokenTi.EchoMode = textinput.EchoPassword
-	ghTokenTi.EchoCharacter = '*'
-	ghTokenTi.SetValue(cfg.GitHubToken)
+	if cfg.GitHubToken != "" {
+		ghTokenTi.SetValue(cfg.GitHubToken)
+	}
 
 	tokenTi := textinput.New()
 	tokenTi.Placeholder = "Enter Hugging Face Token (optional)..."
-	tokenTi.CharLimit = 128
-	tokenTi.Width = 48
+	tokenTi.CharLimit = 156
+	tokenTi.Width = 40
 	tokenTi.EchoMode = textinput.EchoPassword
-	tokenTi.EchoCharacter = '*'
-	tokenTi.SetValue(cfg.HFToken)
+	if cfg.HFToken != "" {
+		tokenTi.SetValue(cfg.HFToken)
+	} else if cfg.HuggingFaceToken != "" {
+		tokenTi.SetValue(cfg.HuggingFaceToken)
+	}
+
+	var q *model.DownloadQueue
+	if cfg.Paths.Downloads != "" {
+		hfToken := cfg.HFToken
+		if hfToken == "" {
+			hfToken = cfg.HuggingFaceToken
+		}
+		q = model.NewDownloadQueue(cfg.Paths.Models, hfToken)
+	}
+
+	// Detect if llama.cpp runtime binary is completely missing on startup
+	llamaCPPMissing := false
+	if cfg.Paths.LlamaCPP != "" {
+		exeName := "llama-server"
+		if runtime.GOOS == "windows" {
+			exeName = "llama-server.exe"
+		}
+		binPath := filepath.Join(cfg.Paths.LlamaCPP, exeName)
+		if _, err := os.Stat(binPath); os.IsNotExist(err) {
+			llamaCPPMissing = true
+		}
+	}
 
 	backends := []runner.BackendType{
 		runner.BackendCUDA12,
+		runner.BackendCUDA13,
 		runner.BackendVulkan,
-		runner.BackendMetal,
 		runner.BackendCPU,
+		runner.BackendROCm,
+		runner.BackendMetal,
 	}
 	defaultBackendIdx := 0
-	if runtime.GOOS == "darwin" {
+	specs, _ := hardware.DetectHardware()
+	if specs != nil && specs.GPU.Type == "CUDA" {
+		defaultBackendIdx = 0
+	} else if specs != nil && (specs.GPU.Type == "Vulkan" || specs.GPU.Type == "DirectX") {
 		defaultBackendIdx = 2
+	} else if runtime.GOOS == "darwin" {
+		defaultBackendIdx = 5
 	}
 
-	q := model.NewDownloadQueue(cfg.Paths.Models, cfg.HFToken)
+	if len(cfg.ModelSources) == 0 {
+		cfg.ModelSources = config.DetectDefaultModelSources()
+	}
 
 	// Apply theme colors
 	ApplyTheme(cfg.Theme)
-
-	// Check if llama.cpp is missing or empty
-	llamaCPPMissing := false
-	dir := cfg.Paths.LlamaCPP
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		llamaCPPMissing = true
-	} else {
-		files, err := os.ReadDir(dir)
-		if err != nil || len(files) == 0 {
-			llamaCPPMissing = true
-		} else {
-			binaryName := "llama-server"
-			if runtime.GOOS == "windows" {
-				binaryName = "llama-server.exe"
-			}
-			if _, err := os.Stat(filepath.Join(dir, binaryName)); os.IsNotExist(err) {
-				llamaCPPMissing = true
-			}
-		}
-	}
 
 	return &BrowserModel{
 		config:                cfg,
@@ -197,6 +216,8 @@ func NewBrowserModel(cfg *config.Config, srv runner.ModelRuntime) *BrowserModel 
 		onboardingBackend:      backends[defaultBackendIdx],
 		onboardingBackendIdx:   defaultBackendIdx,
 		onboardingBackends:     backends,
+		onboardingSources:     cfg.ModelSources,
+		onboardingSourceFocus: 0,
 		llamaCPPMissingActive: llamaCPPMissing && flag.Lookup("test.v") == nil,
 		toasts:                NewToastManager(),
 		mouseReg:              mouse.NewRegistry(),
@@ -363,9 +384,32 @@ type discoverMsg struct {
 	err    error
 }
 
-func discoverCmd(modelsDirs ...string) tea.Cmd {
+func discoverCmd(sources []config.ModelSource, modelsDirs ...string) tea.Cmd {
 	return func() tea.Msg {
 		models, err := model.DiscoverModels(modelsDirs...)
+		if len(sources) > 0 {
+			existing := make(map[string]bool)
+			for _, m := range models {
+				existing[filepath.Clean(m.FilePath)] = true
+			}
+			var discConfigs []discovery.SourceConfig
+			for _, s := range sources {
+				discConfigs = append(discConfigs, discovery.SourceConfig{
+					Type:         discovery.SourceType(s.Type),
+					Name:         s.Name,
+					Enabled:      s.Enabled,
+					CustomPath:   s.CustomPath,
+					DetectedPath: s.DetectedPath,
+				})
+			}
+			importer := discovery.NewImporter()
+			discovered, _, _ := importer.ScanAll(discConfigs, existing)
+			for _, d := range discovered {
+				if d.Metadata != nil {
+					models = append(models, d.Metadata)
+				}
+			}
+		}
 		return discoverMsg{models: models, err: err}
 	}
 }
@@ -521,7 +565,7 @@ func tickCmd() tea.Cmd {
 
 func (m *BrowserModel) Init() tea.Cmd {
 	return tea.Batch(
-		discoverCmd(m.config.Paths.AllModelDirectories()...),
+		discoverCmd(m.config.ModelSources, m.config.Paths.AllModelDirectories()...),
 		m.loadProfilesCmd(),
 		detectHardwareCmd,
 		tickCmd(),
@@ -544,6 +588,62 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.onboardingActive {
+		if m.onboardingStep == StepModelSources {
+			if keyMsg, ok := msg.(tea.KeyMsg); ok {
+				switch keyMsg.String() {
+				case "1", "o", "O":
+					if len(m.onboardingSources) > 0 {
+						m.onboardingSources[0].Enabled = !m.onboardingSources[0].Enabled
+						m.config.ModelSources = m.onboardingSources
+						_ = m.config.Save()
+					}
+					return m, nil
+				case "2", "l", "L":
+					if len(m.onboardingSources) > 1 {
+						m.onboardingSources[1].Enabled = !m.onboardingSources[1].Enabled
+						m.config.ModelSources = m.onboardingSources
+						_ = m.config.Save()
+					}
+					return m, nil
+				case "space":
+					if len(m.onboardingSources) > 0 {
+						if m.onboardingSourceFocus < 0 || m.onboardingSourceFocus >= len(m.onboardingSources) {
+							m.onboardingSourceFocus = 0
+						}
+						m.onboardingSources[m.onboardingSourceFocus].Enabled = !m.onboardingSources[m.onboardingSourceFocus].Enabled
+						m.config.ModelSources = m.onboardingSources
+						_ = m.config.Save()
+					}
+					return m, nil
+				case "up", "k":
+					m.onboardingSourceFocus--
+					if m.onboardingSourceFocus < 0 {
+						m.onboardingSourceFocus = len(m.onboardingSources) - 1
+					}
+					return m, nil
+				case "down", "j", "tab":
+					m.onboardingSourceFocus++
+					if m.onboardingSourceFocus >= len(m.onboardingSources) {
+						m.onboardingSourceFocus = 0
+					}
+					return m, nil
+				case "enter", "n", "N":
+					m.config.ModelSources = m.onboardingSources
+					_ = m.config.Save()
+					m.onboardingStep++
+					return m, nil
+				case "p", "P", "b", "B":
+					m.onboardingStep--
+					return m, nil
+				case "esc", "q", "Q":
+					m.onboardingActive = false
+					m.config.OnboardingCompleted = true
+					_ = m.config.Save()
+					return m, nil
+				}
+			}
+		}
+
 		// StepTokens has interactive text inputs for GitHub and Hugging Face tokens
 		if m.onboardingStep == StepTokens {
 			if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -964,7 +1064,7 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.task != nil && msg.task.Status == model.StatusCompleted {
-			cmds = append(cmds, discoverCmd(m.config.Paths.AllModelDirectories()...))
+			cmds = append(cmds, discoverCmd(m.config.ModelSources, m.config.Paths.AllModelDirectories()...))
 		}
 		cmds = append(cmds, m.readDownloadQueueChan())
 
@@ -2448,7 +2548,7 @@ func (m *BrowserModel) onboardingOverlayView(width int, height int) string {
 	var stepTitle, stepSub, stepIndicator string
 	switch m.onboardingStep {
 	case StepWelcome:
-		stepIndicator = "Step 1 of 5  ● ○ ○ ○ ○"
+		stepIndicator = "Step 1 of 6  ● ○ ○ ○ ○ ○"
 		stepTitle = "WELCOME TO RUNORA"
 		stepSub = "Runora is your local AI control center for managing, profiling, and\n  running high-performance GGUF & ONNX models completely offline."
 
@@ -2505,8 +2605,47 @@ func (m *BrowserModel) onboardingOverlayView(width int, height int) string {
 		}
 		sb.WriteString("  Runora automatically benchmarks and tailors model context limits to your VRAM.\n\n")
 
+	case StepModelSources:
+		stepIndicator = "Step 2 of 6  ● ● ○ ○ ○ ○"
+		stepTitle = "ASSISTANT MODEL LIBRARY IMPORT"
+		stepSub = "Detect existing local models from popular AI runtimes and import them by reference."
+
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(stepTitle), StyleMuted.Render(stepIndicator)))
+		sb.WriteString(fmt.Sprintf("  %s\n\n", lipgloss.NewStyle().Foreground(ColorWhite).Render(stepSub)))
+
+		sb.WriteString(fmt.Sprintf("  %s\n", lipgloss.NewStyle().Bold(true).Render("◆ Discovered External Runtime Libraries:")))
+
+		for i, src := range m.onboardingSources {
+			statusStr := lipgloss.NewStyle().Foreground(ColorMuted).Render("[✗ Not Found]")
+			if src.Detected {
+				statusStr = StyleSuccess.Render("[✓ Detected]")
+			}
+
+			box := "[ ]"
+			if src.Enabled {
+				box = "[*]"
+			}
+
+			rowHeader := fmt.Sprintf("  [%d] %s %-12s %s", i+1, box, src.Name, statusStr)
+			if i == m.onboardingSourceFocus {
+				sb.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(rowHeader) + "\n")
+			} else {
+				sb.WriteString(lipgloss.NewStyle().Foreground(ColorWhite).Bold(true).Render(rowHeader) + "\n")
+			}
+
+			pathStr := src.DetectedPath
+			if pathStr == "" {
+				pathStr = "(Default directory not found)"
+			}
+			sb.WriteString(fmt.Sprintf("      Location: %s\n", TruncateVisual(pathStr, max(24, boxWidth-18), "...")))
+			sb.WriteString(fmt.Sprintf("      Models:   %d discovered\n\n", src.ModelCount))
+		}
+
+		sb.WriteString("  ● Press [1] or [2] to toggle source import on or off.\n")
+		sb.WriteString("  ● Discovered models remain in their original folders and are imported with zero disk duplication.\n\n")
+
 	case StepStorage:
-		stepIndicator = "Step 2 of 5  ● ● ○ ○ ○"
+		stepIndicator = "Step 3 of 6  ● ● ● ○ ○ ○"
 		stepTitle = "MODEL STORAGE & DIRECTORIES"
 		stepSub = "Runora discovers and manages models directly from your local filesystem."
 
@@ -2525,7 +2664,7 @@ func (m *BrowserModel) onboardingOverlayView(width int, height int) string {
 		sb.WriteString("  ● Custom Directories:  Add secondary model folders at any time in Settings [U].\n\n")
 
 	case StepTokens:
-		stepIndicator = "Step 3 of 5  ● ● ● ○ ○"
+		stepIndicator = "Step 4 of 6  ● ● ● ● ○ ○"
 		stepTitle = "API TOKENS CONFIGURATION"
 		stepSub = "Configure optional API credentials for unlimited releases and gated model access."
 
@@ -2554,7 +2693,7 @@ func (m *BrowserModel) onboardingOverlayView(width int, height int) string {
 		sb.WriteString("  ● Tokens are saved locally to config.json and never transmitted externally.\n\n")
 
 	case StepRuntime:
-		stepIndicator = "Step 4 of 5  ● ● ● ● ○"
+		stepIndicator = "Step 5 of 6  ● ● ● ● ● ○"
 		stepTitle = "RUNTIME ENGINE & ACCELERATOR"
 		stepSub = "Configure the llama.cpp inference engine release channel and accelerator backend."
 
@@ -2592,7 +2731,7 @@ func (m *BrowserModel) onboardingOverlayView(width int, height int) string {
 		sb.WriteString("\n")
 
 	case StepFinished:
-		stepIndicator = "Step 5 of 5  ● ● ● ● ●"
+		stepIndicator = "Step 6 of 6  ● ● ● ● ● ●"
 		stepTitle = "SETUP COMPLETED"
 		stepSub = "Runora is ready! Use the following keyboard shortcuts to manage local AI:"
 

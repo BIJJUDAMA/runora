@@ -98,6 +98,17 @@ func (p *Paths) AllModelDirectories() []string {
 	return dirs
 }
 
+type ModelSource struct {
+	Type         string    `json:"type"`
+	Name         string    `json:"name"`
+	Enabled      bool      `json:"enabled"`
+	CustomPath   string    `json:"custom_path,omitempty"`
+	DetectedPath string    `json:"detected_path,omitempty"`
+	Detected     bool      `json:"detected"`
+	LastScanTime time.Time `json:"last_scan_time,omitempty"`
+	ModelCount   int       `json:"model_count"`
+}
+
 type Config struct {
 	Paths               Paths             `json:"paths"`
 	Favorites           []string          `json:"favorites"`
@@ -106,6 +117,7 @@ type Config struct {
 	Theme               string            `json:"theme"`
 	ModelProfiles       map[string]string `json:"model_profiles"`
 	ModelTasks          map[string]string `json:"model_tasks"`
+	ModelSources        []ModelSource     `json:"model_sources,omitempty"`
 	HFToken             string            `json:"-"`
 	GitHubToken         string            `json:"-"`
 	HuggingFaceToken    string            `json:"-"`
@@ -438,4 +450,82 @@ func (c *Config) RecordLaunch(modelPath string) {
 	if len(c.RecentLaunches) > 5 {
 		c.RecentLaunches = c.RecentLaunches[:5]
 	}
+}
+
+// DetectDefaultModelSources detects standard default directories for Ollama and LM Studio.
+func DetectDefaultModelSources() []ModelSource {
+	var sources []ModelSource
+
+	home, _ := os.UserHomeDir()
+
+	// 1. Ollama
+	var ollamaPaths []string
+	if env := os.Getenv("OLLAMA_MODELS"); env != "" {
+		ollamaPaths = append(ollamaPaths, filepath.Clean(env))
+	}
+	if home != "" {
+		ollamaPaths = append(ollamaPaths, filepath.Join(home, ".ollama", "models"))
+	}
+	if runtime.GOOS == "windows" {
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			ollamaPaths = append(ollamaPaths, filepath.Join(local, "Ollama", "models"))
+		}
+		if prof := os.Getenv("USERPROFILE"); prof != "" {
+			ollamaPaths = append(ollamaPaths, filepath.Join(prof, ".ollama", "models"))
+		}
+	} else {
+		ollamaPaths = append(ollamaPaths, "/usr/share/ollama/.ollama/models")
+		ollamaPaths = append(ollamaPaths, "/var/lib/ollama/.ollama/models")
+	}
+
+	ollamaDetectedPath := ""
+	for _, p := range ollamaPaths {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			ollamaDetectedPath = p
+			break
+		}
+	}
+	sources = append(sources, ModelSource{
+		Type:         "ollama",
+		Name:         "Ollama",
+		Enabled:      ollamaDetectedPath != "",
+		Detected:     ollamaDetectedPath != "",
+		DetectedPath: ollamaDetectedPath,
+	})
+
+	// 2. LM Studio
+	var lmPaths []string
+	if env := os.Getenv("LM_STUDIO_MODELS"); env != "" {
+		lmPaths = append(lmPaths, filepath.Clean(env))
+	}
+	if home != "" {
+		lmPaths = append(lmPaths, filepath.Join(home, ".cache", "lm-studio", "models"))
+		lmPaths = append(lmPaths, filepath.Join(home, ".lmstudio", "models"))
+	}
+	if runtime.GOOS == "windows" {
+		if app := os.Getenv("APPDATA"); app != "" {
+			lmPaths = append(lmPaths, filepath.Join(app, "LM Studio", "models"))
+		}
+		if prof := os.Getenv("USERPROFILE"); prof != "" {
+			lmPaths = append(lmPaths, filepath.Join(prof, ".cache", "lm-studio", "models"))
+			lmPaths = append(lmPaths, filepath.Join(prof, ".lmstudio", "models"))
+		}
+	}
+
+	lmDetectedPath := ""
+	for _, p := range lmPaths {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			lmDetectedPath = p
+			break
+		}
+	}
+	sources = append(sources, ModelSource{
+		Type:         "lmstudio",
+		Name:         "LM Studio",
+		Enabled:      lmDetectedPath != "",
+		Detected:     lmDetectedPath != "",
+		DetectedPath: lmDetectedPath,
+	})
+
+	return sources
 }
