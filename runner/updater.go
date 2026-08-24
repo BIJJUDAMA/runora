@@ -1590,27 +1590,17 @@ func DownloadAndInstallApp(release *GithubRelease, downloadsDir string, progress
 		return "", fmt.Errorf("could not locate executable %s inside downloaded package", exeName)
 	}
 
-	// 3. Resolve current running executable location
-	currExe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve current executable path: %w", err)
-	}
-	currExe, err = filepath.EvalSymlinks(currExe)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve symlink for executable path: %w", err)
-	}
-
-	currDir := filepath.Dir(currExe)
-	targetExe := filepath.Join(currDir, exeName)
+	// 3. Resolve target installation executable location
+	targetExe := resolveTargetExecutable(exeName)
 
 	// 4. Perform atomic swap / rename replacement
 	if runtime.GOOS == "windows" {
+		_ = os.MkdirAll(filepath.Dir(targetExe), 0755)
 		oldExe := targetExe + ".old"
 		_ = os.Remove(oldExe)
-		if err := os.Rename(targetExe, oldExe); err != nil {
-			oldExe = currExe + ".old"
-			_ = os.Remove(oldExe)
-			_ = os.Rename(currExe, oldExe)
+		if err := os.Rename(targetExe, oldExe); err != nil && !os.IsNotExist(err) {
+			tsOld := fmt.Sprintf("%s.%d.old", targetExe, time.Now().UnixNano())
+			_ = os.Rename(targetExe, tsOld)
 		}
 
 		data, err := os.ReadFile(newBinaryPath)
@@ -1639,4 +1629,40 @@ func DownloadAndInstallApp(release *GithubRelease, downloadsDir string, progress
 		tagName = "latest"
 	}
 	return fmt.Sprintf("Successfully upgraded Runora to %s! Please restart the application.", tagName), nil
+}
+
+func resolveTargetExecutable(exeName string) string {
+	// If current executable is not inside a temporary build folder (e.g. go-build or temp), use it
+	if currExe, err := os.Executable(); err == nil {
+		if eval, err := filepath.EvalSymlinks(currExe); err == nil {
+			currExe = eval
+		}
+		dir := strings.ToLower(filepath.Dir(currExe))
+		if !strings.Contains(dir, "go-build") && !strings.Contains(dir, "temp") && !strings.Contains(dir, "tmp") {
+			return filepath.Join(filepath.Dir(currExe), exeName)
+		}
+	}
+
+	// Try finding runora in system PATH
+	if lp, err := exec.LookPath(exeName); err == nil {
+		if eval, err := filepath.EvalSymlinks(lp); err == nil {
+			lp = eval
+		}
+		dir := strings.ToLower(filepath.Dir(lp))
+		if !strings.Contains(dir, "go-build") && !strings.Contains(dir, "temp") && !strings.Contains(dir, "tmp") {
+			return lp
+		}
+	}
+
+	// Try GOPATH/bin
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		return filepath.Join(gopath, "bin", exeName)
+	}
+
+	// Fallback to ~/go/bin
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "go", "bin", exeName)
+	}
+
+	return exeName
 }
