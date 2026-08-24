@@ -12,6 +12,9 @@ import (
 	"github.com/BIJJUDAMA/runora/credentials"
 )
 
+// Version is the current semantic release version of Runora.
+const Version = "v2.1.1"
+
 // AppDataDir returns the fixed directory where runora stores all its data.
 // Each supported platform places data in its conventional location.
 func AppDataDir() (string, error) {

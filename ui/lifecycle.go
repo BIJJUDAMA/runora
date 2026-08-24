@@ -103,11 +103,11 @@ type LifecycleModel struct {
 func resolveAppVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		v := info.Main.Version
-		if v != "" && v != "(devel)" {
+		if v != "" && v != "(devel)" && strings.HasPrefix(v, "v2.") {
 			return strings.TrimSuffix(v, "+dirty")
 		}
 	}
-	return "dev"
+	return config.Version
 }
 
 func NewLifecycleModel(cfg *config.Config, srv runner.ModelRuntime) *LifecycleModel {

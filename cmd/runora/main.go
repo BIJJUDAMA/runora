@@ -20,11 +20,11 @@ import (
 func buildVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		v := info.Main.Version
-		if v != "" && v != "(devel)" {
+		if v != "" && v != "(devel)" && strings.HasPrefix(v, "v2.") {
 			return strings.TrimSuffix(v, "+dirty")
 		}
 	}
-	return "dev"
+	return config.Version
 }
 
 func formatFileSize(bytes int64) string {
