@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-08-24
+
+### Fixed
+- Resolved Settings runtime inspector target scoping to eliminate cross-component updater interference.
+- Implemented two-stage Enter key workflow: first Enter checks for updates, second Enter installs updates immediately.
+- Normalized semantic version comparison stripping leading `v` and `b` prefixes to prevent false positive update alerts.
+- Removed duplicate Theme option from Settings Runora App inspector card.
+
+## [2.1.1] - 2026-08-24
+
+### Added
+- Automatic Assistant Library Migration from local Ollama and LM Studio installations across Windows, macOS, and Linux with zero disk weight duplication.
+- Direct GitHub Release Self-Updater with standalone archive extraction, in-place binary swapping, and live download progress bars.
+
 ## [2.1.0] - 2026-08-24
 
 ### Added
