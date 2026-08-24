@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-08-24
+
+### Added
+- Full mouse and touchpad navigation support across the entire Bubble Tea TUI with spatial hit-test registry (`ui/mouse`).
+- Clickable Persistent Global Header tabs (`[1] Models`, `[2] Launch`, `[3] Monitor`, `[4] Downloads`, `[5] Benchmarks`, `[6] Settings`).
+- Model Explorer mouse interaction: single-click row selection, double-click launch transition, and context-aware mouse wheel scrolling.
+- Launch Dashboard mouse interaction: 5x5 Bento grid profile selection click, double-click inference launch, and clipboard copy button.
+- Server Monitor mouse interaction: live instance row selection, double-click to stream logs, and control action buttons (`[R]`, `[S]`, `[Ctrl+K]`, `[L]`).
+- Downloader and Settings mouse interaction: direct input field focus clicks and component inspector navigation.
+- Click-away modal dismissal for overlay dialogs (Theme Picker and help overlays).
+- Cross-platform OS Keyring credentials storage (`github.com/zalando/go-keyring`) supporting Windows Credential Manager, macOS Keychain, and Linux SecretService/libsecret.
+- Automatic credentials migration from plaintext `config.json` to native OS keyring with automatic token sanitization.
+
+### Changed
+- Enabled `tea.WithMouseCellMotion()` in the main Bubble Tea program loop for smooth, jitter-free cursor tracking.
+- Streamlined `ProfileCreatorModel` with dedicated validation and persistence methods.
+
 ## [2.0.0] - 2026-08-23
 
 ### Added
